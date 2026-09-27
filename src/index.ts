@@ -1,19 +1,19 @@
 import express from "express";
 import dotenv from "dotenv";
+import Database from "better-sqlite3";
 import { classifyEmail, executeAgent } from "./agents/executor";
+import { initializeDatabase } from "./database/schema";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// In-memory storage
-const offices: { [key: number]: { id: number; name: string } } = {};
-const tasks: { [key: number]: { id: number; office_id: number; agent_type: string; content: string; response?: string; status: string } } = {};
-const conversations: { [key: string]: any[] } = {};
-
-let officeIdCounter = 1;
-let taskIdCounter = 1;
+// Persistent SQLite storage
+const DB_PATH = process.env.DATABASE_PATH || "./pulpo.db";
+const db = new Database(DB_PATH);
+initializeDatabase(db);
+console.log(`✓ Database ready at ${DB_PATH}`);
 
 // Middleware
 app.use(express.json());
@@ -26,9 +26,8 @@ app.get("/health", (req, res) => {
 // Create office
 app.post("/offices", (req, res) => {
   const { name } = req.body;
-  const id = officeIdCounter++;
-  offices[id] = { id, name };
-  res.json({ id, name });
+  const info = db.prepare("INSERT INTO offices (name) VALUES (?)").run(name);
+  res.json({ id: info.lastInsertRowid, name });
 });
 
 // Classify email and create task
@@ -37,18 +36,13 @@ app.post("/classify", async (req, res) => {
 
   try {
     const classification = await classifyEmail(emailContent);
-    const taskId = taskIdCounter++;
-    
-    tasks[taskId] = {
-      id: taskId,
-      office_id: officeId,
-      agent_type: classification.agent,
-      content: emailContent,
-      status: "pending"
-    };
+
+    const info = db
+      .prepare("INSERT INTO tasks (office_id, agent_type, content, status) VALUES (?, ?, ?, 'pending')")
+      .run(officeId, classification.agent, emailContent);
 
     res.json({
-      taskId,
+      taskId: info.lastInsertRowid,
       agent: classification.agent,
       confidence: classification.confidence,
     });
@@ -63,20 +57,17 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
   const id = parseInt(taskId);
 
   try {
-    const task = tasks[id];
+    const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
+      | { id: number; office_id: number; agent_type: string; content: string }
+      | undefined;
 
     if (!task) {
       return res.status(404).json({ error: "Task not found" });
     }
 
-    const response = await executeAgent(
-      task.office_id,
-      task.agent_type,
-      task.content
-    );
+    const response = await executeAgent(task.office_id, task.agent_type, task.content);
 
-    tasks[id].status = "completed";
-    tasks[id].response = response;
+    db.prepare("UPDATE tasks SET status = 'completed', response = ? WHERE id = ?").run(response, id);
 
     res.json({ taskId: id, response });
   } catch (error) {
@@ -87,8 +78,12 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
 // Get conversation history
 app.get("/offices/:officeId/conversations/:agentType", (req, res) => {
   const { officeId, agentType } = req.params;
-  const key = `${officeId}_${agentType}`;
-  res.json(conversations[key] || []);
+
+  const row = db
+    .prepare("SELECT messages FROM conversations WHERE office_id = ? AND agent_type = ? ORDER BY id DESC LIMIT 1")
+    .get(officeId, agentType) as { messages: string } | undefined;
+
+  res.json(row ? JSON.parse(row.messages) : []);
 });
 
 // Start server
