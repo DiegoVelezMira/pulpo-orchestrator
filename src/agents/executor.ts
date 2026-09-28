@@ -1,23 +1,37 @@
 import dotenv from "dotenv";
 dotenv.config();
 import axios from "axios";
-import { SYSTEM_PROMPTS } from "./prompts";
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 console.log("API Key loaded:", CLAUDE_API_KEY ? "✓ Yes" : "✗ NO");
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 
-export async function classifyEmail(emailContent: string): Promise<{
+// Nota: los system prompts (directivas) ya NO viven hardcodeados aquí.
+// Se leen de la tabla `directives` en SQLite (ver agents/directives.ts) y
+// se reciben como parámetro, para poder ajustarlos sin redeploy y para
+// poder inyectarles aprendizajes acumulados (ver agents/learnings.ts).
+
+export async function classifyEmail(
+  emailContent: string,
+  systemPrompt: string
+): Promise<{
   agent: string;
   confidence: number;
 }> {
+  // Atajo determinista: si no hay contenido real, no vale la pena gastar
+  // una llamada al LLM — el resultado sería ruido de todas formas.
+  if (!emailContent || !emailContent.trim()) {
+    console.log("⚠ Empty content, skipping LLM call");
+    return { agent: "administrativo", confidence: 0 };
+  }
+
   try {
     const response = await axios.post(
       CLAUDE_API_URL,
       {
         model: "claude-haiku-4-5-20251001",
         max_tokens: 200,
-        system: SYSTEM_PROMPTS.pulpo,
+        system: systemPrompt,
         messages: [
           {
             role: "user",
@@ -39,7 +53,7 @@ export async function classifyEmail(emailContent: string): Promise<{
     if (text.startsWith("```")) {
       text = text.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
     }
-    
+
     const parsed = JSON.parse(text);
     console.log("✓ Classification successful:", parsed);
     return parsed;
@@ -53,11 +67,14 @@ export async function classifyEmail(emailContent: string): Promise<{
 export async function executeAgent(
   officeId: number,
   agentType: string,
-  taskContent: string
+  taskContent: string,
+  systemPrompt: string
 ): Promise<string> {
-  try {
-    const systemPrompt = SYSTEM_PROMPTS[agentType as keyof typeof SYSTEM_PROMPTS] || SYSTEM_PROMPTS.administrativo;
+  if (!taskContent || !taskContent.trim()) {
+    throw new Error("Tarea sin contenido: nada que ejecutar.");
+  }
 
+  try {
     const payload = {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1000,
@@ -74,7 +91,6 @@ export async function executeAgent(
     console.log("Agent Type:", agentType);
     console.log("Office ID:", officeId);
     console.log("Task Content:", taskContent.substring(0, 100) + "...");
-    console.log("Payload:", JSON.stringify(payload, null, 2));
     console.log("API URL:", CLAUDE_API_URL);
     console.log("API Key present:", CLAUDE_API_KEY ? "✓ Yes" : "✗ NO");
 
