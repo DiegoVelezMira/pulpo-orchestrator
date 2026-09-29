@@ -3,6 +3,7 @@ import { classifyEmail, executeAgent } from "../agents/executor";
 import { getDirective } from "../agents/directives";
 import { listLearnings, formatLearningsForPrompt } from "../agents/learnings";
 import { listConnectedOffices, fetchNewMessages, markProcessed, touchLastPolled } from "./gmail";
+import { getDriveContextForOffice } from "./drive";
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // cada 5 minutos, como pidió Diego
 
@@ -47,7 +48,23 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
 
       const agentDirective = getDirective(db, classification.agent);
       const learnings = listLearnings(db, classification.agent, officeId) as { content: string }[];
-      const systemPrompt = agentDirective + formatLearningsForPrompt(learnings);
+      let systemPrompt = agentDirective + formatLearningsForPrompt(learnings);
+
+      // Bloque 2: solo se consulta Drive cuando el propio clasificador
+      // determinó que el correo lo amerita.
+      if (classification.needsDriveContext) {
+        const office = db.prepare("SELECT name FROM offices WHERE id = ?").get(officeId) as
+          | { name: string }
+          | undefined;
+        if (office) {
+          const driveContext = await getDriveContextForOffice(db, officeId, office.name);
+          if (driveContext) {
+            systemPrompt += `\n\n--- Contexto de Drive (oficina: ${office.name}) ---\n${driveContext}`;
+            db.prepare("UPDATE tasks SET drive_context = ? WHERE id = ?").run(driveContext, taskId);
+            console.log(`📁 Drive: contexto inyectado para tarea ${taskId} (office ${officeId})`);
+          }
+        }
+      }
 
       try {
         const response = await executeAgent(officeId, classification.agent, emailContent, systemPrompt);
