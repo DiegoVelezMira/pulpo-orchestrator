@@ -11,6 +11,8 @@ import {
   setDirective,
 } from "./agents/directives";
 import { addLearning, listLearnings, formatLearningsForPrompt } from "./agents/learnings";
+import { getAuthUrl, handleOAuthCallback, getConnection } from "./services/gmail";
+import { startGmailPoller } from "./services/poller";
 
 dotenv.config();
 
@@ -172,6 +174,53 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
   }
 });
 
+// --- Gmail: cada oficina conecta su propia cuenta (Bloque 1 del plan de oficina autónoma) ---
+
+// Paso 1: el navegador de quien administra la oficina entra aquí y lo mandamos a Google
+app.get("/offices/:officeId/gmail/connect", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  try {
+    const url = getAuthUrl(officeId);
+    res.redirect(url);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Paso 2: Google redirige de vuelta aquí con el código de autorización
+app.get("/gmail/oauth/callback", async (req, res) => {
+  const { code, state, error: oauthError } = req.query;
+
+  if (oauthError) {
+    return res.status(400).send(`Autorización cancelada o rechazada: ${oauthError}`);
+  }
+  if (!code || typeof code !== "string" || !state || typeof state !== "string") {
+    return res.status(400).send("Falta el código de autorización o el office id (state).");
+  }
+
+  const officeId = parseInt(state);
+
+  try {
+    const { email } = await handleOAuthCallback(db, code, officeId);
+    res.send(
+      `✓ Gmail conectado: ${email} quedó vinculado a la oficina ${officeId}. Pulpo empezará a leer esta bandeja en el próximo ciclo de polling (cada 5 min). Puedes cerrar esta ventana.`
+    );
+  } catch (error) {
+    res.status(500).send(`Error conectando Gmail: ${String(error)}`);
+  }
+});
+
+// Estado de la conexión de una oficina
+app.get("/offices/:officeId/gmail/status", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const conn = getConnection(db, officeId);
+  res.json(
+    conn
+      ? { connected: true, email: conn.email_address }
+      : { connected: false }
+  );
+});
+
 // Get conversation history
 app.get("/offices/:officeId/conversations/:agentType", (req, res) => {
   const { officeId, agentType } = req.params;
@@ -186,4 +235,5 @@ app.get("/offices/:officeId/conversations/:agentType", (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`✓ Pulpo server running on http://localhost:${PORT}`);
+  startGmailPoller(db);
 });
