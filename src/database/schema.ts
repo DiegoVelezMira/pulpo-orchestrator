@@ -2,10 +2,6 @@ import Database from "better-sqlite3";
 
 export function initializeDatabase(db: Database.Database) {
   db.exec(`
-    import Database from "better-sqlite3";
-
-export function initializeDatabase(db: Database.Database) {
-  db.exec(`
     CREATE TABLE IF NOT EXISTS offices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
