@@ -12,6 +12,7 @@ import {
 } from "./agents/directives";
 import { addLearning, listLearnings, formatLearningsForPrompt } from "./agents/learnings";
 import { getAuthUrl, handleOAuthCallback, getConnection } from "./services/gmail";
+import { getDriveContextForOffice } from "./services/drive";
 import { startGmailPoller } from "./services/poller";
 
 dotenv.config();
@@ -129,13 +130,16 @@ app.post("/classify", async (req, res) => {
     const classification = await classifyEmail(emailContent, directive);
 
     const info = db
-      .prepare("INSERT INTO tasks (office_id, agent_type, content, status) VALUES (?, ?, ?, 'pending')")
-      .run(officeId, classification.agent, emailContent);
+      .prepare(
+        "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context) VALUES (?, ?, ?, 'pending', ?)"
+      )
+      .run(officeId, classification.agent, emailContent, classification.needsDriveContext ? 1 : 0);
 
     res.json({
       taskId: info.lastInsertRowid,
       agent: classification.agent,
       confidence: classification.confidence,
+      needsDriveContext: classification.needsDriveContext,
     });
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -149,7 +153,7 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
 
   try {
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
-      | { id: number; office_id: number; agent_type: string; content: string }
+      | { id: number; office_id: number; agent_type: string; content: string; needs_drive_context: number }
       | undefined;
 
     if (!task) {
@@ -158,7 +162,21 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
 
     const directive = getDirective(db, task.agent_type);
     const learnings = listLearnings(db, task.agent_type, task.office_id) as { content: string }[];
-    const systemPrompt = directive + formatLearningsForPrompt(learnings);
+    let systemPrompt = directive + formatLearningsForPrompt(learnings);
+
+    // Bloque 2: solo se consulta Drive cuando el clasificador lo marcó.
+    if (task.needs_drive_context) {
+      const office = db.prepare("SELECT name FROM offices WHERE id = ?").get(task.office_id) as
+        | { name: string }
+        | undefined;
+      if (office) {
+        const driveContext = await getDriveContextForOffice(db, task.office_id, office.name);
+        if (driveContext) {
+          systemPrompt += `\n\n--- Contexto de Drive (oficina: ${office.name}) ---\n${driveContext}`;
+          db.prepare("UPDATE tasks SET drive_context = ? WHERE id = ?").run(driveContext, id);
+        }
+      }
+    }
 
     const response = await executeAgent(task.office_id, task.agent_type, task.content, systemPrompt);
 
