@@ -17,12 +17,17 @@ export async function classifyEmail(
 ): Promise<{
   agent: string;
   confidence: number;
+  // Bloque 2 (Drive): el propio clasificador decide si vale la pena ir a
+  // buscar contexto en Drive para este correo — no se consulta Drive en
+  // cada ejecución, solo "cuando el contenido del correo lo amerite"
+  // (ej. menciona un documento, un cliente, una cuenta, pide un anexo).
+  needsDriveContext: boolean;
 }> {
   // Atajo determinista: si no hay contenido real, no vale la pena gastar
   // una llamada al LLM — el resultado sería ruido de todas formas.
   if (!emailContent || !emailContent.trim()) {
     console.log("⚠ Empty content, skipping LLM call");
-    return { agent: "administrativo", confidence: 0 };
+    return { agent: "administrativo", confidence: 0, needsDriveContext: false };
   }
 
   try {
@@ -35,7 +40,7 @@ export async function classifyEmail(
         messages: [
           {
             role: "user",
-            content: `Clasifica este email y responde SOLO con JSON válido, sin markdown ni explicaciones:\n\n${emailContent}`,
+            content: `Clasifica este email y responde SOLO con JSON válido, sin markdown ni explicaciones. El JSON debe tener exactamente estos campos: "agent" (string), "confidence" (número entre 0 y 1), y "needsDriveContext" (booleano: true SOLO si resolver este correo probablemente requiere consultar documentos, contratos, estados financieros u otra información almacenada en el Drive de la oficina; false si el correo se puede resolver solo con su propio contenido).\n\nEmail:\n${emailContent}`,
           },
         ],
       },
@@ -55,12 +60,13 @@ export async function classifyEmail(
     }
 
     const parsed = JSON.parse(text);
+    parsed.needsDriveContext = Boolean(parsed.needsDriveContext);
     console.log("✓ Classification successful:", parsed);
     return parsed;
   } catch (error: any) {
     console.error("Classification error:", error.response?.status, error.response?.data || error.message);
     console.error("Raw text that failed to parse:", error.message);
-    return { agent: "administrativo", confidence: 0.5 };
+    return { agent: "administrativo", confidence: 0.5, needsDriveContext: false };
   }
 }
 
