@@ -69,4 +69,28 @@ export function initializeDatabase(db: Database.Database) {
       UNIQUE (office_id, gmail_message_id)
     );
   `);
+
+  // Bloque 2 (Drive): columnas nuevas sobre tablas que ya existen en
+  // producción. ALTER TABLE no soporta "IF NOT EXISTS" en SQLite, así que
+  // se envuelve en try/catch para tolerar reejecutar esto contra una DB
+  // que ya las tiene (falla con "duplicate column name", se ignora).
+  try {
+    db.exec(`ALTER TABLE gmail_connections ADD COLUMN drive_folder_id TEXT`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN drive_context TEXT`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  // Guarda la decisión del clasificador (¿amerita Drive?) para que
+  // /tasks/:id/execute la use más tarde, sin tener que reclasificar.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN needs_drive_context INTEGER DEFAULT 0`);
+  } catch {
+    // ya existe, no pasa nada
+  }
 }
