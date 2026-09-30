@@ -138,15 +138,22 @@ app.post("/classify", async (req, res) => {
 
     const info = db
       .prepare(
-        "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context) VALUES (?, ?, ?, 'pending', ?)"
+        "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context, needs_approval) VALUES (?, ?, ?, 'pending', ?, ?)"
       )
-      .run(officeId, classification.agent, emailContent, classification.needsDriveContext ? 1 : 0);
+      .run(
+        officeId,
+        classification.agent,
+        emailContent,
+        classification.needsDriveContext ? 1 : 0,
+        classification.needsApproval ? 1 : 0
+      );
 
     res.json({
       taskId: info.lastInsertRowid,
       agent: classification.agent,
       confidence: classification.confidence,
       needsDriveContext: classification.needsDriveContext,
+      needsApproval: classification.needsApproval,
     });
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -160,7 +167,14 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
 
   try {
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as
-      | { id: number; office_id: number; agent_type: string; content: string; needs_drive_context: number }
+      | {
+          id: number;
+          office_id: number;
+          agent_type: string;
+          content: string;
+          needs_drive_context: number;
+          needs_approval: number;
+        }
       | undefined;
 
     if (!task) {
@@ -187,9 +201,19 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
 
     const response = await executeAgent(task.office_id, task.agent_type, task.content, systemPrompt);
 
-    db.prepare("UPDATE tasks SET status = 'completed', response = ? WHERE id = ?").run(response, id);
+    // Bloque 4: una tarea completada no siempre queda cerrada. Si el
+    // clasificador marcó needs_approval, queda 'completed' pero con
+    // approval_status='pending' — visible en el panel de aprobaciones hasta
+    // que alguien la apruebe o la rechace. Si no, approval_status queda NULL:
+    // se auto-resuelve, como hasta ahora.
+    const approvalStatus = task.needs_approval ? "pending" : null;
+    db.prepare("UPDATE tasks SET status = 'completed', response = ?, approval_status = ? WHERE id = ?").run(
+      response,
+      approvalStatus,
+      id
+    );
 
-    res.json({ taskId: id, response });
+    res.json({ taskId: id, response, needsApproval: Boolean(task.needs_approval) });
   } catch (error) {
     // Empujar el fallo a un estado determinista y consultable, en vez de
     // perderlo en un 500 transitorio: la tarea queda visible como 'failed'
@@ -255,6 +279,48 @@ app.get("/offices/:officeId/conversations/:agentType", (req, res) => {
     .get(officeId, agentType) as { messages: string } | undefined;
 
   res.json(row ? JSON.parse(row.messages) : []);
+});
+
+// --- Bloque 4: Aprobaciones ---
+// Patrón de aprobación selectiva: una tarea completada queda auto-resuelta
+// (approval_status NULL) o pendiente de revisión humana (approval_status
+// 'pending'), según lo que decidió el clasificador al crearla (needs_approval,
+// ver executor.ts). Solo lo segundo necesita que alguien mire el panel.
+
+// Aprobaciones pendientes de una oficina
+app.get("/offices/:officeId/approvals", (req, res) => {
+  const { officeId } = req.params;
+  const rows = db
+    .prepare(
+      "SELECT * FROM tasks WHERE office_id = ? AND approval_status = 'pending' ORDER BY id DESC"
+    )
+    .all(officeId);
+  res.json(rows);
+});
+
+// Aprobar una tarea: su respuesta queda validada
+app.post("/tasks/:taskId/approve", (req, res) => {
+  const id = parseInt(req.params.taskId);
+  const task = db.prepare("SELECT id FROM tasks WHERE id = ?").get(id);
+  if (!task) return res.status(404).json({ error: "Task not found" });
+
+  db.prepare(
+    "UPDATE tasks SET approval_status = 'approved', approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).run(id);
+  res.json({ taskId: id, approval_status: "approved" });
+});
+
+// Rechazar una tarea: queda marcada para retrabajo, con nota opcional de por qué
+app.post("/tasks/:taskId/reject", (req, res) => {
+  const id = parseInt(req.params.taskId);
+  const { note } = req.body;
+  const task = db.prepare("SELECT id FROM tasks WHERE id = ?").get(id);
+  if (!task) return res.status(404).json({ error: "Task not found" });
+
+  db.prepare(
+    "UPDATE tasks SET approval_status = 'rejected', approval_note = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).run(note || null, id);
+  res.json({ taskId: id, approval_status: "rejected" });
 });
 
 // --- Bloque 3: Reportería ---
