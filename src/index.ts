@@ -14,6 +14,13 @@ import { addLearning, listLearnings, formatLearningsForPrompt } from "./agents/l
 import { getAuthUrl, handleOAuthCallback, getConnection } from "./services/gmail";
 import { getDriveContextForOffice } from "./services/drive";
 import { startGmailPoller } from "./services/poller";
+import {
+  listClients,
+  getOrCreateClient,
+  insertFinancialRecords,
+  generateIncomeExpenseReport,
+  seedDemoFinancialData,
+} from "./services/reporting";
 
 dotenv.config();
 
@@ -248,6 +255,84 @@ app.get("/offices/:officeId/conversations/:agentType", (req, res) => {
     .get(officeId, agentType) as { messages: string } | undefined;
 
   res.json(row ? JSON.parse(row.messages) : []);
+});
+
+// --- Bloque 3: Reportería ---
+// Plantilla Ingresos/Gastos, genérica por diseño (ver reporting.ts):
+// agrupa por código PUC, nunca por texto libre ni por nombre de cliente
+// hardcodeado, así que el mismo código sirve para Diana o para cualquier
+// oficina que se conecte después.
+
+// Clientes de una oficina
+app.get("/offices/:officeId/clients", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  res.json(listClients(db, officeId));
+});
+
+app.post("/offices/:officeId/clients", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const { name } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: "name requerido" });
+  }
+  res.json(getOrCreateClient(db, officeId, name.trim()));
+});
+
+// Carga de movimientos contables (ingesta real futura: Drive, CSV, DIAN...
+// todas convergen aquí, ya mapeadas a account_code del PUC).
+app.post("/offices/:officeId/clients/:clientId/financial-records", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const clientId = parseInt(req.params.clientId);
+  const { records } = req.body;
+
+  if (!Array.isArray(records) || records.length === 0) {
+    return res.status(400).json({ error: "records debe ser un array no vacío" });
+  }
+
+  try {
+    const inserted = insertFinancialRecords(db, officeId, clientId, records);
+    res.json({ inserted });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Mientras Diana no tenga histórico cargado, esto genera 7 meses de datos
+// plausibles (marcados source='demo') para poder construir y validar la
+// plantilla sin esperar. Se puede volver a llamar para regenerar.
+app.post("/offices/:officeId/demo-data/seed", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const { clientName } = req.body;
+  try {
+    const result = seedDemoFinancialData(db, officeId, clientName);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Reporte Ingresos/Gastos para un cliente en un rango de fechas
+// (?from=YYYY-MM-DD&to=YYYY-MM-DD). Si no se pasan, usa el mes en curso.
+app.get("/offices/:officeId/clients/:clientId/reports/ingresos-gastos", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const clientId = parseInt(req.params.clientId);
+
+  const now = new Date();
+  const defaultFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const defaultTo = now.toISOString().slice(0, 10);
+
+  const from = typeof req.query.from === "string" ? req.query.from : defaultFrom;
+  const to = typeof req.query.to === "string" ? req.query.to : defaultTo;
+
+  try {
+    const report = generateIncomeExpenseReport(db, officeId, clientId, from, to);
+    if (!report) {
+      return res.status(404).json({ error: "Cliente no encontrado en esta oficina" });
+    }
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 // Start server
