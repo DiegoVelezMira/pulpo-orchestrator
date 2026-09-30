@@ -2,8 +2,20 @@ import Database from "better-sqlite3";
 import { classifyEmail, executeAgent } from "../agents/executor";
 import { getDirective } from "../agents/directives";
 import { listLearnings, formatLearningsForPrompt } from "../agents/learnings";
-import { listConnectedOffices, fetchNewMessages, markProcessed, touchLastPolled } from "./gmail";
-import { getDriveContextForOffice } from "./drive";
+import {
+  listConnectedOffices,
+  fetchNewMessages,
+  downloadAttachment,
+  markProcessed,
+  touchLastPolled,
+} from "./gmail";
+import { getDriveContextForOffice, uploadAttachmentToOfficeFolder } from "./drive";
+
+// Solo estos tipos de correo ameritan que sus adjuntos se archiven solos en
+// el Drive de la oficina — "administrativo" es donde cae todo lo demás
+// (tickets, pero también ruido: newsletters, publicidad), y no vale la pena
+// (ni es deseable) llenar la carpeta de la oficina con eso.
+const AGENT_TYPES_THAT_ARCHIVE_ATTACHMENTS = new Set(["contable", "legal"]);
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // cada 5 minutos, como pidió Diego
 
@@ -52,18 +64,42 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
       const learnings = listLearnings(db, classification.agent, officeId) as { content: string }[];
       let systemPrompt = agentDirective + formatLearningsForPrompt(learnings);
 
+      const office = db.prepare("SELECT name FROM offices WHERE id = ?").get(officeId) as
+        | { name: string }
+        | undefined;
+
       // Bloque 2: solo se consulta Drive cuando el propio clasificador
       // determinó que el correo lo amerita.
-      if (classification.needsDriveContext) {
-        const office = db.prepare("SELECT name FROM offices WHERE id = ?").get(officeId) as
-          | { name: string }
-          | undefined;
-        if (office) {
-          const driveContext = await getDriveContextForOffice(db, officeId, office.name);
-          if (driveContext) {
-            systemPrompt += `\n\n--- Contexto de Drive (oficina: ${office.name}) ---\n${driveContext}`;
-            db.prepare("UPDATE tasks SET drive_context = ? WHERE id = ?").run(driveContext, taskId);
-            console.log(`📁 Drive: contexto inyectado para tarea ${taskId} (office ${officeId})`);
+      if (classification.needsDriveContext && office) {
+        const driveContext = await getDriveContextForOffice(db, officeId, office.name);
+        if (driveContext) {
+          systemPrompt += `\n\n--- Contexto de Drive (oficina: ${office.name}) ---\n${driveContext}`;
+          db.prepare("UPDATE tasks SET drive_context = ? WHERE id = ?").run(driveContext, taskId);
+          console.log(`📁 Drive: contexto inyectado para tarea ${taskId} (office ${officeId})`);
+        }
+      }
+
+      // Archivado automático de adjuntos: solo para correos clasificados
+      // como contable/legal, para no llenar la carpeta de Drive con ruido.
+      if (office && email.attachments.length > 0 && AGENT_TYPES_THAT_ARCHIVE_ATTACHMENTS.has(classification.agent)) {
+        for (const attachment of email.attachments) {
+          try {
+            const data = await downloadAttachment(db, conn, email.gmailMessageId, attachment.attachmentId);
+            if (data) {
+              await uploadAttachmentToOfficeFolder(
+                db,
+                conn,
+                office.name,
+                attachment.filename,
+                attachment.mimeType,
+                data
+              );
+            }
+          } catch (attachError) {
+            console.error(
+              `✗ Adjunto "${attachment.filename}" falló (office ${officeId}, tarea ${taskId}):`,
+              String(attachError)
+            );
           }
         }
       }
