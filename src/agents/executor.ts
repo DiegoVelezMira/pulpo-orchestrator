@@ -22,12 +22,16 @@ export async function classifyEmail(
   // cada ejecución, solo "cuando el contenido del correo lo amerite"
   // (ej. menciona un documento, un cliente, una cuenta, pide un anexo).
   needsDriveContext: boolean;
+  // Bloque 4 (Aprobaciones): mismo principio — el clasificador decide si
+  // el resultado de esta tarea debe quedar pendiente de revisión humana
+  // antes de darse por bueno, en vez de auto-resolverse en silencio.
+  needsApproval: boolean;
 }> {
   // Atajo determinista: si no hay contenido real, no vale la pena gastar
   // una llamada al LLM — el resultado sería ruido de todas formas.
   if (!emailContent || !emailContent.trim()) {
     console.log("⚠ Empty content, skipping LLM call");
-    return { agent: "administrativo", confidence: 0, needsDriveContext: false };
+    return { agent: "administrativo", confidence: 0, needsDriveContext: false, needsApproval: false };
   }
 
   try {
@@ -40,7 +44,7 @@ export async function classifyEmail(
         messages: [
           {
             role: "user",
-            content: `Clasifica este email y responde SOLO con JSON válido, sin markdown ni explicaciones. El JSON debe tener exactamente estos campos: "agent" (string), "confidence" (número entre 0 y 1), y "needsDriveContext" (booleano: true SOLO si resolver este correo probablemente requiere consultar documentos, contratos, estados financieros u otra información almacenada en el Drive de la oficina; false si el correo se puede resolver solo con su propio contenido).\n\nEmail:\n${emailContent}`,
+            content: `Clasifica este email y responde SOLO con JSON válido, sin markdown ni explicaciones. El JSON debe tener exactamente estos campos: "agent" (string), "confidence" (número entre 0 y 1), "needsDriveContext" (booleano: true SOLO si resolver este correo probablemente requiere consultar documentos, contratos, estados financieros u otra información almacenada en el Drive de la oficina; false si el correo se puede resolver solo con su propio contenido), y "needsApproval" (booleano: true SOLO si la respuesta que genere el agente tendrá una consecuencia real que amerita que un humano la revise antes de darla por buena — por ejemplo, algo que saldrá de la oficina hacia un tercero, compromete dinero, tiene implicación legal o tributaria, o la confianza de la clasificación es baja; false si es una consulta puramente interna, informativa o de bajo riesgo que se puede dar por resuelta automáticamente).\n\nEmail:\n${emailContent}`,
           },
         ],
       },
@@ -61,12 +65,16 @@ export async function classifyEmail(
 
     const parsed = JSON.parse(text);
     parsed.needsDriveContext = Boolean(parsed.needsDriveContext);
+    parsed.needsApproval = Boolean(parsed.needsApproval);
     console.log("✓ Classification successful:", parsed);
     return parsed;
   } catch (error: any) {
     console.error("Classification error:", error.response?.status, error.response?.data || error.message);
     console.error("Raw text that failed to parse:", error.message);
-    return { agent: "administrativo", confidence: 0.5, needsDriveContext: false };
+    // Ante un fallo de clasificación, mejor pecar de cauteloso: se marca
+    // pendiente de aprobación en vez de auto-resolverse sin haber podido
+    // evaluar el riesgo real.
+    return { agent: "administrativo", confidence: 0.5, needsDriveContext: false, needsApproval: true };
   }
 }
 
