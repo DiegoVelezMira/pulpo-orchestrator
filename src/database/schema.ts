@@ -93,4 +93,43 @@ export function initializeDatabase(db: Database.Database) {
   } catch {
     // ya existe, no pasa nada
   }
+
+  // --- Bloque 3 (Reportería): clientes por oficina + libro de movimientos ---
+  // Diseñado para ser genérico entre oficinas desde el día 1: el reporte
+  // nunca lee "los clientes de Diana", lee `clients` filtrado por
+  // office_id, y nunca agrupa por texto libre, agrupa por account_code del
+  // PUC (Plan Único de Cuentas colombiano) — así la misma plantilla sirve
+  // para cualquier oficina sin tocar código, solo cambia qué datos entran.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS clients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (office_id) REFERENCES offices(id),
+      UNIQUE (office_id, name)
+    );
+
+    -- Una fila = un movimiento contable (ingreso, gasto, costo...) de un
+    -- cliente de una oficina, ya mapeado a un account_code del PUC. Esta
+    -- tabla es la única fuente que lee cualquier plantilla de reporte —
+    -- de dónde salió el dato (Drive, CSV subido, DIAN...) es un problema
+    -- de ingesta, resuelto antes de llegar aquí, no un problema del reporte.
+    CREATE TABLE IF NOT EXISTS financial_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER NOT NULL,
+      client_id INTEGER NOT NULL,
+      account_code TEXT NOT NULL,
+      account_name TEXT NOT NULL,
+      amount REAL NOT NULL,
+      transaction_date TEXT NOT NULL,
+      source TEXT DEFAULT 'manual',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (office_id) REFERENCES offices(id),
+      FOREIGN KEY (client_id) REFERENCES clients(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_financial_records_lookup
+      ON financial_records (office_id, client_id, transaction_date);
+  `);
 }
