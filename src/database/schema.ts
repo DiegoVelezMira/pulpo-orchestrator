@@ -132,4 +132,37 @@ export function initializeDatabase(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_financial_records_lookup
       ON financial_records (office_id, client_id, transaction_date);
   `);
+
+  // --- Bloque 4 (Aprobaciones): mismo patrón que needs_drive_context —
+  // el propio clasificador decide, al vuelo, si el resultado de esta tarea
+  // amerita que un humano lo revise antes de darlo por bueno (ej. algo que
+  // sale de la oficina hacia un tercero, compromete plata o tiene
+  // implicación legal/tributaria) o si se puede dar por auto-resuelto
+  // (ej. una consulta interna, un resumen, algo puramente informativo).
+  // La decisión se guarda en needs_approval al clasificar; al ejecutar,
+  // si needs_approval=1 la tarea completada queda con approval_status
+  // ='pending' en vez de darse por cerrada silenciosamente.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN needs_approval INTEGER DEFAULT 0`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN approval_status TEXT`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN approval_note TEXT`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN approved_at DATETIME`);
+  } catch {
+    // ya existe, no pasa nada
+  }
 }
