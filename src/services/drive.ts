@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { Readable } from "stream";
 import { google } from "googleapis";
 import { getAuthedClientForOffice, getConnection, GmailConnectionRow } from "./gmail";
 
@@ -10,7 +11,7 @@ import { getAuthedClientForOffice, getConnection, GmailConnectionRow } from "./g
 
 // Cachea el folder_id encontrado en `gmail_connections.drive_folder_id` para
 // no repetir la búsqueda por nombre en cada correo que la amerite.
-async function findOfficeFolderId(
+export async function findOfficeFolderId(
   db: Database.Database,
   conn: GmailConnectionRow,
   officeName: string
@@ -123,5 +124,44 @@ export async function getDriveContextForOffice(
   } catch (error) {
     console.error(`✗ Drive: fallo obteniendo contexto para oficina ${officeId}:`, String(error));
     return null;
+  }
+}
+
+// Sube un adjunto de correo (ya descargado como base64url por gmail.ts) a la
+// carpeta de Drive de la oficina. Solo se llama para correos clasificados
+// como contable/legal (ver poller.ts) — así no se llena la carpeta con
+// adjuntos de ruido (newsletters, publicidad, etc.).
+export async function uploadAttachmentToOfficeFolder(
+  db: Database.Database,
+  conn: GmailConnectionRow,
+  officeName: string,
+  filename: string,
+  mimeType: string,
+  base64urlData: string
+): Promise<boolean> {
+  try {
+    const folderId = await findOfficeFolderId(db, conn, officeName);
+    if (!folderId) {
+      console.log(`⚠ Drive: no se pudo subir "${filename}", no hay carpeta para oficina "${officeName}"`);
+      return false;
+    }
+
+    const auth = getAuthedClientForOffice(db, conn);
+    const drive = google.drive({ version: "v3", auth });
+
+    // Gmail entrega los adjuntos en base64url (- y _ en vez de + y /).
+    const buffer = Buffer.from(base64urlData.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+
+    await drive.files.create({
+      requestBody: { name: filename, parents: [folderId] },
+      media: { mimeType, body: Readable.from(buffer) },
+      fields: "id",
+    });
+
+    console.log(`📁 Drive: adjunto "${filename}" subido a carpeta de "${officeName}"`);
+    return true;
+  } catch (error) {
+    console.error(`✗ Drive: fallo subiendo adjunto "${filename}":`, String(error));
+    return false;
   }
 }
