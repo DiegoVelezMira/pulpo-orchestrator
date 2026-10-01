@@ -43,6 +43,8 @@
   .badge.urgency-5,.badge.urgency-4{background:rgba(248,113,113,.15);color:var(--bad)}
   .badge.urgency-3{background:rgba(251,191,36,.15);color:var(--warn)}
   .badge.urgency-2,.badge.urgency-1{background:rgba(74,222,128,.15);color:var(--ok)}
+  .badge.severity-critical{background:rgba(248,113,113,.15);color:var(--bad)}
+  .badge.severity-warning{background:rgba(251,191,36,.15);color:var(--warn)}
   .approval-actions{display:flex;gap:8px;margin-top:8px}
   .approval-actions button.approve{background:var(--ok);color:#0f1115}
   .approval-actions button.reject{background:var(--bad);color:#0f1115}
@@ -86,6 +88,12 @@
         <div id="ticketList"><div class="empty">Selecciona una oficina</div></div>
       </div>
 
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Alertas de Compliance (Legal)</h2>
+        <button id="runChecksBtn" class="secondary" style="width:100%;margin-bottom:10px">Correr chequeos</button>
+        <div id="complianceList"><div class="empty">Selecciona una oficina</div></div>
+      </div>
+
       <h2>Tareas</h2>
       <div id="taskList"><div class="empty">Selecciona una oficina</div></div>
     </div>
@@ -126,6 +134,35 @@ async function selectOffice(office) {
   loadTasks();
   loadApprovals();
   loadTickets();
+  loadComplianceFlags();
+}
+
+const CHECK_TYPE_LABELS = {
+  rut_vencido: "RUT vencido", aportes_vencidos: "Aportes vencidos", salario_bajo_minimo: "Salario bajo el mínimo",
+};
+
+async function loadComplianceFlags() {
+  if (!currentOffice) return;
+  const box = document.getElementById("complianceList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const flags = await api(`/offices/${currentOffice.id}/legal/flags`);
+  if (!flags.length) {
+    box.innerHTML = '<div class="empty">Sin alertas activas</div>';
+    return;
+  }
+  box.innerHTML = "";
+  flags.forEach(f => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>${escapeHtml(f.client_name)}</span>
+        <span class="badge severity-${f.severity}">${CHECK_TYPE_LABELS[f.check_type] || f.check_type}</span>
+      </div>
+      <pre>${escapeHtml(f.message)}</pre>
+    `;
+    box.appendChild(div);
+  });
 }
 
 const TICKET_TYPE_LABELS = {
@@ -327,6 +364,26 @@ document.getElementById("classifyBtn").onclick = async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Clasificar y crear tarea";
+  }
+};
+
+document.getElementById("runChecksBtn").onclick = async () => {
+  if (!currentOffice) return;
+  const btn = document.getElementById("runChecksBtn");
+  btn.disabled = true;
+  btn.textContent = "Corriendo…";
+  try {
+    await api(`/offices/${currentOffice.id}/legal/run-checks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    loadComplianceFlags();
+  } catch (e) {
+    alert("Error corriendo chequeos: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Correr chequeos";
   }
 };
 
