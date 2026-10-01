@@ -30,6 +30,11 @@ const GMAIL_SCOPES = [
   // oficina automáticamente. Esto requiere reconexión de cuentas ya
   // conectadas con el scope anterior (Google exige nuevo consentimiento).
   "https://www.googleapis.com/auth/drive",
+  // Bloque 4 (Aprobaciones): notificación activa — Pulpo se manda un correo
+  // a sí mismo (la misma bandeja que ya lee) avisando que hay tareas
+  // pendientes de aprobación. Igual que con Drive, ampliar el scope exige
+  // reconectar las cuentas ya conectadas (Google pide consentimiento nuevo).
+  "https://www.googleapis.com/auth/gmail.send",
 ];
 
 // officeId viaja en `state` para saber, cuando Google redirige de vuelta,
@@ -261,4 +266,39 @@ export function markProcessed(db: Database.Database, officeId: number, gmailMess
 
 export function touchLastPolled(db: Database.Database, officeId: number) {
   db.prepare("UPDATE gmail_connections SET last_polled_at = CURRENT_TIMESTAMP WHERE office_id = ?").run(officeId);
+}
+
+// Bloque 4 (Aprobaciones): notificación activa. Se manda a la misma
+// dirección conectada de la oficina (conn.email_address) — es la bandeja
+// que la persona de la oficina ya revisa, así que sirve como canal de
+// aviso sin necesitar un destinatario configurado aparte. Requiere el
+// scope gmail.send (ver GMAIL_SCOPES arriba); si la conexión es previa a
+// ese scope, Gmail devuelve un error de permisos y quien llama debe
+// pedirle a la oficina que reconecte desde /offices/:officeId/gmail/connect.
+export async function sendNotificationEmail(
+  db: Database.Database,
+  conn: GmailConnectionRow,
+  subject: string,
+  bodyText: string
+): Promise<void> {
+  const auth = getAuthedClientForOffice(db, conn);
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const messageLines = [
+    `To: ${conn.email_address}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "",
+    bodyText,
+  ];
+  const raw = Buffer.from(messageLines.join("\r\n"), "utf-8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw },
+  });
 }
