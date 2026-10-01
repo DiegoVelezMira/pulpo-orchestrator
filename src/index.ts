@@ -138,14 +138,16 @@ app.post("/classify", async (req, res) => {
 
     const info = db
       .prepare(
-        "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context, needs_approval) VALUES (?, ?, ?, 'pending', ?, ?)"
+        "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context, needs_approval, ticket_type, urgency) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)"
       )
       .run(
         officeId,
         classification.agent,
         emailContent,
         classification.needsDriveContext ? 1 : 0,
-        classification.needsApproval ? 1 : 0
+        classification.needsApproval ? 1 : 0,
+        classification.ticketType,
+        classification.urgency
       );
 
     res.json({
@@ -154,6 +156,8 @@ app.post("/classify", async (req, res) => {
       confidence: classification.confidence,
       needsDriveContext: classification.needsDriveContext,
       needsApproval: classification.needsApproval,
+      ticketType: classification.ticketType,
+      urgency: classification.urgency,
     });
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -321,6 +325,50 @@ app.post("/tasks/:taskId/reject", (req, res) => {
     "UPDATE tasks SET approval_status = 'rejected', approval_note = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?"
   ).run(note || null, id);
   res.json({ taskId: id, approval_status: "rejected" });
+});
+
+// --- Administrativo extendido: bandeja de tickets con auto-triage ---
+// Mismo mecanismo que needsDriveContext/needsApproval: el clasificador
+// decide ticket_type y urgency en la misma llamada (ver executor.ts), y
+// esta bandeja los expone ordenados por urgencia para que la oficina
+// priorice sin tener que leer tarea por tarea. Solo tiene sentido real
+// para tareas agent_type='administrativo', pero no se filtra por eso a
+// nivel de endpoint — el query param type ya permite acotar si hace falta.
+
+// Bandeja de tickets de una oficina, ordenada por urgencia (5→1) y luego
+// por antigüedad. Filtros opcionales: ?type=reclamo&status=pending
+app.get("/offices/:officeId/tickets", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const { type, status } = req.query;
+
+  let query = "SELECT * FROM tasks WHERE office_id = ? AND agent_type = 'administrativo'";
+  const params: any[] = [officeId];
+
+  if (typeof type === "string" && type.trim()) {
+    query += " AND ticket_type = ?";
+    params.push(type.trim());
+  }
+  if (typeof status === "string" && status.trim()) {
+    query += " AND status = ?";
+    params.push(status.trim());
+  }
+
+  query += " ORDER BY urgency DESC, id ASC";
+
+  const rows = db.prepare(query).all(...params);
+  res.json(rows);
+});
+
+// Vincular un ticket a un cliente existente de la oficina (match manual
+// por ahora — no hay matching automático por remitente todavía).
+app.post("/tasks/:taskId/link-client", (req, res) => {
+  const id = parseInt(req.params.taskId);
+  const { clientId } = req.body;
+  const task = db.prepare("SELECT id FROM tasks WHERE id = ?").get(id);
+  if (!task) return res.status(404).json({ error: "Task not found" });
+
+  db.prepare("UPDATE tasks SET client_id = ? WHERE id = ?").run(clientId || null, id);
+  res.json({ taskId: id, clientId: clientId || null });
 });
 
 // --- Bloque 3: Reportería ---
