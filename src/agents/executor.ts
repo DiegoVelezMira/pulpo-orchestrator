@@ -26,12 +26,26 @@ export async function classifyEmail(
   // el resultado de esta tarea debe quedar pendiente de revisión humana
   // antes de darse por bueno, en vez de auto-resolverse en silencio.
   needsApproval: boolean;
+  // Administrativo extendido: mismo principio otra vez — el clasificador
+  // hace el triage de una vez, en la misma llamada, en vez de una segunda
+  // pasada solo para tickets. Solo tiene significado real cuando
+  // agent="administrativo"; para los demás agentes el clasificador igual
+  // debe devolver algo (usa "otro"/2 por defecto) pero no se usa.
+  ticketType: "factura" | "rut" | "datos" | "consulta" | "reclamo" | "otro";
+  urgency: number; // 1 (baja) a 5 (urgente)
 }> {
   // Atajo determinista: si no hay contenido real, no vale la pena gastar
   // una llamada al LLM — el resultado sería ruido de todas formas.
   if (!emailContent || !emailContent.trim()) {
     console.log("⚠ Empty content, skipping LLM call");
-    return { agent: "administrativo", confidence: 0, needsDriveContext: false, needsApproval: false };
+    return {
+      agent: "administrativo",
+      confidence: 0,
+      needsDriveContext: false,
+      needsApproval: false,
+      ticketType: "otro",
+      urgency: 1,
+    };
   }
 
   try {
@@ -44,7 +58,7 @@ export async function classifyEmail(
         messages: [
           {
             role: "user",
-            content: `Clasifica este email y responde SOLO con JSON válido, sin markdown ni explicaciones. El JSON debe tener exactamente estos campos: "agent" (string), "confidence" (número entre 0 y 1), "needsDriveContext" (booleano: true SOLO si resolver este correo probablemente requiere consultar documentos, contratos, estados financieros u otra información almacenada en el Drive de la oficina; false si el correo se puede resolver solo con su propio contenido), y "needsApproval" (booleano: true SOLO si la respuesta que genere el agente tendrá una consecuencia real que amerita que un humano la revise antes de darla por buena — por ejemplo, algo que saldrá de la oficina hacia un tercero, compromete dinero, tiene implicación legal o tributaria, o la confianza de la clasificación es baja; false si es una consulta puramente interna, informativa o de bajo riesgo que se puede dar por resuelta automáticamente).\n\nEmail:\n${emailContent}`,
+            content: `Clasifica este email y responde SOLO con JSON válido, sin markdown ni explicaciones. El JSON debe tener exactamente estos campos: "agent" (string), "confidence" (número entre 0 y 1), "needsDriveContext" (booleano: true SOLO si resolver este correo probablemente requiere consultar documentos, contratos, estados financieros u otra información almacenada en el Drive de la oficina; false si el correo se puede resolver solo con su propio contenido), "needsApproval" (booleano: true SOLO si la respuesta que genere el agente tendrá una consecuencia real que amerita que un humano la revise antes de darla por buena — por ejemplo, algo que saldrá de la oficina hacia un tercero, compromete dinero, tiene implicación legal o tributaria, o la confianza de la clasificación es baja; false si es una consulta puramente interna, informativa o de bajo riesgo que se puede dar por resuelta automáticamente), "ticketType" (string, uno de "factura"|"rut"|"datos"|"consulta"|"reclamo"|"otro" — SOLO tiene sentido real cuando agent="administrativo": factura=solicitud o problema de facturación, rut=trámite o corrección de RUT, datos=actualización de datos del cliente, consulta=pregunta informativa, reclamo=queja o problema que requiere atención prioritaria; si agent no es "administrativo" usa "otro"), y "urgency" (número entero de 1 a 5, donde 5 es más urgente — considera plazos vencidos o por vencer, cliente visiblemente molesto, o dinero/cumplimiento en juego como señales de urgencia alta; si agent no es "administrativo" usa 2).\n\nEmail:\n${emailContent}`,
           },
         ],
       },
@@ -66,6 +80,10 @@ export async function classifyEmail(
     const parsed = JSON.parse(text);
     parsed.needsDriveContext = Boolean(parsed.needsDriveContext);
     parsed.needsApproval = Boolean(parsed.needsApproval);
+    const validTicketTypes = ["factura", "rut", "datos", "consulta", "reclamo", "otro"];
+    parsed.ticketType = validTicketTypes.includes(parsed.ticketType) ? parsed.ticketType : "otro";
+    const urgency = Number(parsed.urgency);
+    parsed.urgency = Number.isFinite(urgency) ? Math.min(5, Math.max(1, Math.round(urgency))) : 2;
     console.log("✓ Classification successful:", parsed);
     return parsed;
   } catch (error: any) {
@@ -74,7 +92,14 @@ export async function classifyEmail(
     // Ante un fallo de clasificación, mejor pecar de cauteloso: se marca
     // pendiente de aprobación en vez de auto-resolverse sin haber podido
     // evaluar el riesgo real.
-    return { agent: "administrativo", confidence: 0.5, needsDriveContext: false, needsApproval: true };
+    return {
+      agent: "administrativo",
+      confidence: 0.5,
+      needsDriveContext: false,
+      needsApproval: true,
+      ticketType: "otro",
+      urgency: 3,
+    };
   }
 }
 
