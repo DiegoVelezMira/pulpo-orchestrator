@@ -30,6 +30,7 @@ import {
   runComplianceChecksForOffice,
   listComplianceFlags,
 } from "./services/legal";
+import { getSiigoConfig, setSiigoConfig, runDianComplianceChecks, listDianInvoiceFlags } from "./services/siigo";
 
 dotenv.config();
 
@@ -521,6 +522,57 @@ app.post("/offices/:officeId/legal/run-checks", (req, res) => {
 app.get("/offices/:officeId/legal/flags", (req, res) => {
   const officeId = parseInt(req.params.officeId);
   res.json(listComplianceFlags(db, officeId));
+});
+
+// --- Legal: integración DIAN vía Siigo (segundo incremento) ---
+// GET nunca devuelve access_key, mismo criterio que /gmail/status con los
+// tokens OAuth.
+app.get("/offices/:officeId/siigo/config", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const config = getSiigoConfig(db, officeId);
+  res.json({
+    office_id: config.office_id,
+    connected: Boolean(config.username && config.access_key),
+    username: config.username,
+    partner_id: config.partner_id,
+    invoice_lookback_days: config.invoice_lookback_days,
+    rejected_status_values: config.rejected_status_values,
+  });
+});
+
+app.put("/offices/:officeId/siigo/config", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const { username, accessKey, partnerId, invoiceLookbackDays, rejectedStatusValues } = req.body;
+  const updated = setSiigoConfig(db, officeId, {
+    ...(username !== undefined ? { username } : {}),
+    ...(accessKey !== undefined ? { access_key: accessKey } : {}),
+    ...(partnerId !== undefined ? { partner_id: partnerId } : {}),
+    ...(invoiceLookbackDays !== undefined ? { invoice_lookback_days: Number(invoiceLookbackDays) } : {}),
+    ...(rejectedStatusValues !== undefined ? { rejected_status_values: rejectedStatusValues } : {}),
+  });
+  res.json({
+    office_id: updated.office_id,
+    connected: Boolean(updated.username && updated.access_key),
+    username: updated.username,
+    partner_id: updated.partner_id,
+    invoice_lookback_days: updated.invoice_lookback_days,
+    rejected_status_values: updated.rejected_status_values,
+  });
+});
+
+app.post("/offices/:officeId/siigo/run-checks", async (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  try {
+    const flags = await runDianComplianceChecks(db, officeId);
+    res.json({ flagsDetected: flags.length, flags });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get("/offices/:officeId/siigo/flags", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  res.json(listDianInvoiceFlags(db, officeId));
 });
 
 // Start server
