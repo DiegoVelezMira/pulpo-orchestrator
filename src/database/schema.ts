@@ -165,4 +165,13 @@ export function initializeDatabase(db: Database.Database) {
   } catch {
     // ya existe, no pasa nada
   }
+
+  // Notificación activa de aprobaciones pendientes: marca cuándo se avisó
+  // por correo, para no reenviar la misma tarea en cada ciclo de polling
+  // (cada 5 min) mientras siga sin resolver.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN approval_notified_at DATETIME`);
+  } catch {
+    // ya existe, no pasa nada
+  }
 }
