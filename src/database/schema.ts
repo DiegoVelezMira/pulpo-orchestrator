@@ -245,5 +245,37 @@ export function initializeDatabase(db: Database.Database) {
       FOREIGN KEY (office_id) REFERENCES offices(id),
       FOREIGN KEY (client_id) REFERENCES clients(id)
     );
+
+    -- Legal: integración DIAN vía Siigo (segundo incremento, ver siigo.ts).
+    -- access_key se guarda en texto plano, mismo criterio que
+    -- gmail_connections.refresh_token — no es un secreto más sensible que
+    -- ese y no introducimos un segundo estándar de manejo de credenciales.
+    CREATE TABLE IF NOT EXISTS siigo_config (
+      office_id INTEGER PRIMARY KEY,
+      username TEXT,
+      access_key TEXT,
+      partner_id TEXT,
+      invoice_lookback_days INTEGER NOT NULL DEFAULT 30,
+      rejected_status_values TEXT NOT NULL DEFAULT '["Rejected","rejected","Rechazada","rechazada"]',
+      FOREIGN KEY (office_id) REFERENCES offices(id)
+    );
+
+    -- Facturas electrónicas rechazadas por la DIAN (detectadas vía Siigo).
+    -- Se reemplaza en cada corrida, igual que compliance_flags. No tiene
+    -- client_id porque el cliente de la factura en Siigo no necesariamente
+    -- coincide con un registro en nuestra tabla clients.
+    CREATE TABLE IF NOT EXISTS dian_invoice_flags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER NOT NULL,
+      siigo_invoice_id TEXT NOT NULL,
+      invoice_number TEXT,
+      customer_name TEXT,
+      check_type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      message TEXT NOT NULL,
+      error_detail TEXT,
+      detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (office_id) REFERENCES offices(id)
+    );
   `);
 }
