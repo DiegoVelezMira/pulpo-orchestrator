@@ -39,6 +39,10 @@
   .badge.approval-pending{background:rgba(251,191,36,.15);color:var(--warn)}
   .badge.approval-approved{background:rgba(74,222,128,.15);color:var(--ok)}
   .badge.approval-rejected{background:rgba(248,113,113,.15);color:var(--bad)}
+  .badge.ticket-type{background:rgba(107,138,253,.15);color:var(--accent)}
+  .badge.urgency-5,.badge.urgency-4{background:rgba(248,113,113,.15);color:var(--bad)}
+  .badge.urgency-3{background:rgba(251,191,36,.15);color:var(--warn)}
+  .badge.urgency-2,.badge.urgency-1{background:rgba(74,222,128,.15);color:var(--ok)}
   .approval-actions{display:flex;gap:8px;margin-top:8px}
   .approval-actions button.approve{background:var(--ok);color:#0f1115}
   .approval-actions button.reject{background:var(--bad);color:#0f1115}
@@ -75,6 +79,11 @@
       <div class="card" style="padding:14px;margin-bottom:14px">
         <h2>Aprobaciones pendientes</h2>
         <div id="approvalList"><div class="empty">Selecciona una oficina</div></div>
+      </div>
+
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Bandeja de tickets (Administrativo) — por urgencia</h2>
+        <div id="ticketList"><div class="empty">Selecciona una oficina</div></div>
       </div>
 
       <h2>Tareas</h2>
@@ -116,6 +125,64 @@ async function selectOffice(office) {
   loadOffices();
   loadTasks();
   loadApprovals();
+  loadTickets();
+}
+
+const TICKET_TYPE_LABELS = {
+  factura: "Factura", rut: "RUT", datos: "Datos", consulta: "Consulta", reclamo: "Reclamo", otro: "Otro",
+};
+
+function ticketBadges(t) {
+  if (!t.ticket_type && !t.urgency) return "";
+  const typeLabel = TICKET_TYPE_LABELS[t.ticket_type] || t.ticket_type;
+  const type = t.ticket_type ? `<span class="badge ticket-type">${typeLabel}</span>` : "";
+  const urgency = t.urgency ? `<span class="badge urgency-${t.urgency}">urgencia ${t.urgency}</span>` : "";
+  return `${type} ${urgency}`;
+}
+
+async function loadTickets() {
+  if (!currentOffice) return;
+  const box = document.getElementById("ticketList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const tickets = await api(`/offices/${currentOffice.id}/tickets`);
+  if (!tickets.length) {
+    box.innerHTML = '<div class="empty">Sin tickets todavía</div>';
+    return;
+  }
+  box.innerHTML = "";
+  tickets.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>#${t.id}</span>
+        <span>
+          ${ticketBadges(t)}
+          <span class="badge ${t.status}">${t.status}</span>
+          ${approvalBadge(t)}
+        </span>
+      </div>
+      <pre>${escapeHtml(t.content)}</pre>
+      ${t.response ? `<pre style="color:var(--muted);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${escapeHtml(t.response)}</pre>` : ""}
+      ${t.status === "pending" ? `<div style="margin-top:8px"><button class="secondary ticketExecBtn" data-id="${t.id}">Ejecutar</button></div>` : ""}
+    `;
+    box.appendChild(div);
+  });
+  box.querySelectorAll(".ticketExecBtn").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = "Ejecutando…";
+      try {
+        await api(`/tasks/${btn.dataset.id}/execute`, { method: "POST" });
+        loadTickets();
+        loadTasks();
+        loadApprovals();
+      } catch (e) {
+        alert("Error ejecutando el ticket: " + e.message);
+        btn.disabled = false;
+      }
+    };
+  });
 }
 
 function approvalBadge(t) {
@@ -158,6 +225,7 @@ async function loadApprovals() {
       await api(`/tasks/${btn.dataset.id}/approve`, { method: "POST" });
       loadApprovals();
       loadTasks();
+      loadTickets();
     };
   });
   box.querySelectorAll(".reject").forEach(btn => {
@@ -171,6 +239,7 @@ async function loadApprovals() {
       });
       loadApprovals();
       loadTasks();
+      loadTickets();
     };
   });
 }
@@ -192,6 +261,7 @@ async function loadTasks() {
       <div class="meta">
         <span>#${t.id} · ${t.agent_type}</span>
         <span>
+          ${ticketBadges(t)}
           <span class="badge ${t.status}">${t.status}</span>
           ${approvalBadge(t)}
         </span>
@@ -210,6 +280,7 @@ async function loadTasks() {
         await api(`/tasks/${btn.dataset.id}/execute`, { method: "POST" });
         loadTasks();
         loadApprovals();
+        loadTickets();
       } catch (e) {
         alert("Error ejecutando la tarea: " + e.message);
         btn.disabled = false;
@@ -250,6 +321,7 @@ document.getElementById("classifyBtn").onclick = async () => {
     });
     ta.value = "";
     loadTasks();
+    loadTickets();
   } catch (e) {
     alert("Error clasificando: " + e.message);
   } finally {
