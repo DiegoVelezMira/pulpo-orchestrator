@@ -8,6 +8,8 @@ import {
   downloadAttachment,
   markProcessed,
   touchLastPolled,
+  sendNotificationEmail,
+  type GmailConnectionRow,
 } from "./gmail";
 import { getDriveContextForOffice, uploadAttachmentToOfficeFolder } from "./drive";
 
@@ -18,6 +20,53 @@ import { getDriveContextForOffice, uploadAttachmentToOfficeFolder } from "./driv
 const AGENT_TYPES_THAT_ARCHIVE_ATTACHMENTS = new Set(["contable", "legal"]);
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // cada 5 minutos, como pidió Diego
+
+// URL pública de Pulpo, para armar el link al panel dentro del correo de
+// notificación. Opcional: si no está configurada, el correo se manda igual,
+// solo sin el link (mejor avisar sin link que no avisar).
+const PULPO_BASE_URL = process.env.PULPO_BASE_URL;
+
+// Bloque 4 (Aprobaciones): notificación activa. Después de cada ciclo de
+// polling de una oficina, revisa si quedaron tareas pendientes de
+// aprobación sin avisar todavía (approval_notified_at IS NULL) y manda UN
+// solo correo-resumen con todas, en vez de un correo por tarea — así no se
+// inunda la bandeja si entran varias de una. Se marca approval_notified_at
+// para no repetir el aviso en el próximo ciclo mientras siga sin resolverse.
+async function notifyPendingApprovals(db: Database.Database, officeId: number, conn: GmailConnectionRow) {
+  const pending = db
+    .prepare(
+      "SELECT id, agent_type, content FROM tasks WHERE office_id = ? AND approval_status = 'pending' AND approval_notified_at IS NULL ORDER BY id ASC"
+    )
+    .all(officeId) as { id: number; agent_type: string; content: string }[];
+
+  if (pending.length === 0) return;
+
+  const lines = pending.map((t) => {
+    const preview = t.content.replace(/\s+/g, " ").trim().slice(0, 140);
+    return `#${t.id} · ${t.agent_type}\n${preview}${t.content.length > 140 ? "…" : ""}`;
+  });
+
+  const panelLink = PULPO_BASE_URL ? `\n\nRevísalas en el panel: ${PULPO_BASE_URL}` : "";
+  const subject =
+    pending.length === 1
+      ? "Pulpo: 1 tarea pendiente de aprobación"
+      : `Pulpo: ${pending.length} tareas pendientes de aprobación`;
+  const body = `Estas tareas quedaron listas pero necesitan tu revisión antes de darse por buenas:\n\n${lines.join(
+    "\n\n"
+  )}${panelLink}`;
+
+  try {
+    await sendNotificationEmail(db, conn, subject, body);
+    const markNotified = db.prepare("UPDATE tasks SET approval_notified_at = CURRENT_TIMESTAMP WHERE id = ?");
+    for (const t of pending) markNotified.run(t.id);
+    console.log(`✉ Notificación de aprobaciones enviada (office ${officeId}): ${pending.length} tarea(s)`);
+  } catch (error) {
+    // No relanzar: si el correo falla (ej. falta el scope gmail.send porque
+    // la cuenta se conectó antes de este bloque), las tareas siguen visibles
+    // en el panel igual — el aviso activo es un extra, no la única vía.
+    console.error(`✗ Notificación de aprobaciones falló (office ${officeId}):`, String(error));
+  }
+}
 
 // Corre exactamente el mismo camino que ya usa /classify + /tasks/:id/execute
 // (mismo dedup, mismo guard clause, misma persistencia de fallos) para que
@@ -55,9 +104,15 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
 
       const info = db
         .prepare(
-          "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context) VALUES (?, ?, ?, 'pending', ?)"
+          "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context, needs_approval) VALUES (?, ?, ?, 'pending', ?, ?)"
         )
-        .run(officeId, classification.agent, emailContent, classification.needsDriveContext ? 1 : 0);
+        .run(
+          officeId,
+          classification.agent,
+          emailContent,
+          classification.needsDriveContext ? 1 : 0,
+          classification.needsApproval ? 1 : 0
+        );
       const taskId = Number(info.lastInsertRowid);
 
       const agentDirective = getDirective(db, classification.agent);
@@ -106,7 +161,15 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
 
       try {
         const response = await executeAgent(officeId, classification.agent, emailContent, systemPrompt);
-        db.prepare("UPDATE tasks SET status = 'completed', response = ? WHERE id = ?").run(response, taskId);
+        // Mismo patrón que /tasks/:id/execute: si el clasificador marcó
+        // needsApproval, queda 'completed' pero con approval_status='pending'
+        // en vez de darse por cerrada en silencio.
+        const approvalStatus = classification.needsApproval ? "pending" : null;
+        db.prepare("UPDATE tasks SET status = 'completed', response = ?, approval_status = ? WHERE id = ?").run(
+          response,
+          approvalStatus,
+          taskId
+        );
         console.log(`✓ Procesado (office ${officeId}): "${email.subject}" → ${classification.agent} (tarea ${taskId})`);
       } catch (execError) {
         db.prepare("UPDATE tasks SET status = 'failed', response = ? WHERE id = ?").run(String(execError), taskId);
@@ -123,6 +186,7 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
     }
   }
 
+  await notifyPendingApprovals(db, officeId, conn);
   touchLastPolled(db, officeId);
 }
 
