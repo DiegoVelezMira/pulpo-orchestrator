@@ -104,14 +104,16 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
 
       const info = db
         .prepare(
-          "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context, needs_approval) VALUES (?, ?, ?, 'pending', ?, ?)"
+          "INSERT INTO tasks (office_id, agent_type, content, status, needs_drive_context, needs_approval, ticket_type, urgency) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)"
         )
         .run(
           officeId,
           classification.agent,
           emailContent,
           classification.needsDriveContext ? 1 : 0,
-          classification.needsApproval ? 1 : 0
+          classification.needsApproval ? 1 : 0,
+          classification.ticketType,
+          classification.urgency
         );
       const taskId = Number(info.lastInsertRowid);
 
