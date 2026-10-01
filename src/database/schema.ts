@@ -201,4 +201,49 @@ export function initializeDatabase(db: Database.Database) {
   } catch {
     // ya existe, no pasa nada
   }
+
+  // --- Legal: compliance checks mecánicos (primer incremento, ver legal.ts) ---
+  // Determinísticos, no pasan por Claude. Deliberadamente sin nada que
+  // dependa de una consulta en vivo a la DIAN todavía — eso queda para
+  // una fase posterior, una vez se defina el acceso a esas APIs.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS legal_config (
+      office_id INTEGER PRIMARY KEY,
+      smlv REAL NOT NULL DEFAULT 1750905,
+      rut_update_threshold_days INTEGER NOT NULL DEFAULT 365,
+      aportes_grace_days INTEGER NOT NULL DEFAULT 45,
+      FOREIGN KEY (office_id) REFERENCES offices(id)
+    );
+
+    -- Hechos que la oficina ya conoce o registra manualmente sobre un
+    -- cliente, base para correr los 3 chequeos mecánicos. Un cliente =
+    -- una fila (se actualiza por campo, no se acumula historial aquí).
+    CREATE TABLE IF NOT EXISTS compliance_facts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER NOT NULL,
+      client_id INTEGER NOT NULL,
+      rut_fecha_actualizacion TEXT,
+      aportes_fecha_ultimo_pago TEXT,
+      salario_minimo_empleado REAL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (office_id) REFERENCES offices(id),
+      FOREIGN KEY (client_id) REFERENCES clients(id),
+      UNIQUE (office_id, client_id)
+    );
+
+    -- Resultado de la última corrida de chequeos. Se reemplaza en cada
+    -- corrida (ver runComplianceChecks) — refleja el estado actual, no
+    -- un historial de alertas pasadas.
+    CREATE TABLE IF NOT EXISTS compliance_flags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER NOT NULL,
+      client_id INTEGER NOT NULL,
+      check_type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      message TEXT NOT NULL,
+      detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (office_id) REFERENCES offices(id),
+      FOREIGN KEY (client_id) REFERENCES clients(id)
+    );
+  `);
 }
