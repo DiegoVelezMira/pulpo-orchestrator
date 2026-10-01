@@ -21,6 +21,15 @@ import {
   generateIncomeExpenseReport,
   seedDemoFinancialData,
 } from "./services/reporting";
+import {
+  getLegalConfig,
+  setLegalConfig,
+  upsertComplianceFacts,
+  getComplianceFacts,
+  runComplianceChecks,
+  runComplianceChecksForOffice,
+  listComplianceFlags,
+} from "./services/legal";
 
 dotenv.config();
 
@@ -447,6 +456,71 @@ app.get("/offices/:officeId/clients/:clientId/reports/ingresos-gastos", (req, re
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
+});
+
+// --- Legal: compliance checks mecánicos (primer incremento) ---
+// Determinísticos, no pasan por Claude — ver legal.ts. Deliberadamente sin
+// nada que dependa de la DIAN todavía; eso queda para una vez se defina
+// el acceso a esas APIs.
+
+// Config legal de la oficina (SMLV y umbrales). Tiene defaults razonables
+// (SMLV 2026), no hace falta llamarlo si no se quiere personalizar.
+app.get("/offices/:officeId/legal/config", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  res.json(getLegalConfig(db, officeId));
+});
+
+app.put("/offices/:officeId/legal/config", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const { smlv, rutUpdateThresholdDays, aportesGraceDays } = req.body;
+  const updated = setLegalConfig(db, officeId, {
+    ...(smlv !== undefined ? { smlv: Number(smlv) } : {}),
+    ...(rutUpdateThresholdDays !== undefined ? { rut_update_threshold_days: Number(rutUpdateThresholdDays) } : {}),
+    ...(aportesGraceDays !== undefined ? { aportes_grace_days: Number(aportesGraceDays) } : {}),
+  });
+  res.json(updated);
+});
+
+// Hechos de compliance de un cliente — lo que la oficina ya sabe o
+// registra manualmente, base para correr los chequeos mecánicos.
+app.get("/offices/:officeId/clients/:clientId/compliance-facts", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const clientId = parseInt(req.params.clientId);
+  res.json(getComplianceFacts(db, officeId, clientId) || null);
+});
+
+app.post("/offices/:officeId/clients/:clientId/compliance-facts", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const clientId = parseInt(req.params.clientId);
+  const { rutFechaActualizacion, aportesFechaUltimoPago, salarioMinimoEmpleado } = req.body;
+  const facts = upsertComplianceFacts(db, officeId, clientId, {
+    ...(rutFechaActualizacion !== undefined ? { rut_fecha_actualizacion: rutFechaActualizacion } : {}),
+    ...(aportesFechaUltimoPago !== undefined ? { aportes_fecha_ultimo_pago: aportesFechaUltimoPago } : {}),
+    ...(salarioMinimoEmpleado !== undefined ? { salario_minimo_empleado: Number(salarioMinimoEmpleado) } : {}),
+  });
+  res.json(facts);
+});
+
+// Corre los chequeos: de un cliente puntual (clientId en el body), o de
+// toda la oficina si no se pasa. Reemplaza las flags anteriores con el
+// estado actual — no se acumulan.
+app.post("/offices/:officeId/legal/run-checks", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const { clientId } = req.body;
+  try {
+    const flags = clientId
+      ? runComplianceChecks(db, officeId, parseInt(clientId))
+      : runComplianceChecksForOffice(db, officeId);
+    res.json({ flagsDetected: flags.length, flags });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Flags de compliance activas de toda la oficina, ordenadas por severidad.
+app.get("/offices/:officeId/legal/flags", (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  res.json(listComplianceFlags(db, officeId));
 });
 
 // Start server
