@@ -94,6 +94,19 @@
         <div id="complianceList"><div class="empty">Selecciona una oficina</div></div>
       </div>
 
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Facturación electrónica DIAN (Siigo)</h2>
+        <div id="siigoStatus" class="empty">Selecciona una oficina</div>
+        <div id="siigoConfigForm" style="display:none;margin-top:10px">
+          <input id="siigoUsername" placeholder="Usuario Siigo" />
+          <input id="siigoAccessKey" type="password" placeholder="Access key" />
+          <input id="siigoPartnerId" placeholder="Partner-Id (opcional)" />
+          <button id="siigoSaveBtn" class="secondary" style="width:100%">Guardar credenciales</button>
+        </div>
+        <button id="siigoRunChecksBtn" class="secondary" style="width:100%;margin:10px 0;display:none">Correr chequeos DIAN</button>
+        <div id="siigoFlagsList"></div>
+      </div>
+
       <h2>Tareas</h2>
       <div id="taskList"><div class="empty">Selecciona una oficina</div></div>
     </div>
@@ -135,7 +148,91 @@ async function selectOffice(office) {
   loadApprovals();
   loadTickets();
   loadComplianceFlags();
+  loadSiigoStatus();
 }
+
+async function loadSiigoStatus() {
+  if (!currentOffice) return;
+  const status = await api(`/offices/${currentOffice.id}/siigo/config`);
+  const statusBox = document.getElementById("siigoStatus");
+  const form = document.getElementById("siigoConfigForm");
+  const runBtn = document.getElementById("siigoRunChecksBtn");
+  if (status.connected) {
+    statusBox.textContent = `Conectado como ${status.username}`;
+    statusBox.className = "";
+    runBtn.style.display = "block";
+    loadSiigoFlags();
+  } else {
+    statusBox.textContent = "Sin credenciales de Siigo configuradas";
+    statusBox.className = "empty";
+    form.style.display = "block";
+    runBtn.style.display = "none";
+    document.getElementById("siigoFlagsList").innerHTML = "";
+  }
+}
+
+async function loadSiigoFlags() {
+  if (!currentOffice) return;
+  const box = document.getElementById("siigoFlagsList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const flags = await api(`/offices/${currentOffice.id}/siigo/flags`);
+  if (!flags.length) {
+    box.innerHTML = '<div class="empty">Sin facturas rechazadas</div>';
+    return;
+  }
+  box.innerHTML = "";
+  flags.forEach(f => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>${escapeHtml(f.customer_name || "Cliente sin nombre")} · factura ${escapeHtml(f.invoice_number || f.siigo_invoice_id)}</span>
+        <span class="badge severity-${f.severity}">Rechazada DIAN</span>
+      </div>
+      <pre>${escapeHtml(f.message)}</pre>
+      ${f.error_detail ? `<pre style="color:var(--muted);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${escapeHtml(f.error_detail)}</pre>` : ""}
+    `;
+    box.appendChild(div);
+  });
+}
+
+document.getElementById("siigoSaveBtn").onclick = async () => {
+  if (!currentOffice) return;
+  const username = document.getElementById("siigoUsername").value.trim();
+  const accessKey = document.getElementById("siigoAccessKey").value.trim();
+  const partnerId = document.getElementById("siigoPartnerId").value.trim();
+  if (!username || !accessKey) return;
+  const btn = document.getElementById("siigoSaveBtn");
+  btn.disabled = true;
+  try {
+    await api(`/offices/${currentOffice.id}/siigo/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, accessKey, partnerId: partnerId || undefined }),
+    });
+    loadSiigoStatus();
+  } catch (e) {
+    alert("Error guardando credenciales de Siigo: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+document.getElementById("siigoRunChecksBtn").onclick = async () => {
+  if (!currentOffice) return;
+  const btn = document.getElementById("siigoRunChecksBtn");
+  btn.disabled = true;
+  btn.textContent = "Corriendo…";
+  try {
+    await api(`/offices/${currentOffice.id}/siigo/run-checks`, { method: "POST" });
+    loadSiigoFlags();
+  } catch (e) {
+    alert("Error corriendo chequeos DIAN: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Correr chequeos DIAN";
+  }
+};
 
 const CHECK_TYPE_LABELS = {
   rut_vencido: "RUT vencido", aportes_vencidos: "Aportes vencidos", salario_bajo_minimo: "Salario bajo el mínimo",
