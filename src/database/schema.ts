@@ -174,4 +174,31 @@ export function initializeDatabase(db: Database.Database) {
   } catch {
     // ya existe, no pasa nada
   }
+
+  // --- Administrativo extendido: auto-triage de tickets ---
+  // Mismo patrón que needs_drive_context / needs_approval: el propio
+  // clasificador decide, en la misma llamada, el tipo de ticket (factura,
+  // rut, datos, consulta, reclamo, otro) y su urgencia (1-5, 5 = más
+  // urgente). Solo tiene sentido para tareas ruteadas a "administrativo",
+  // pero se guarda igual para cualquier tarea por simplicidad del esquema.
+  // client_id vincula el ticket a un registro de `clients` (tabla ya
+  // existente desde Reportería) cuando se puede identificar al remitente —
+  // nullable porque hoy no hay match automático por correo, es manual.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN ticket_type TEXT`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN urgency INTEGER`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN client_id INTEGER REFERENCES clients(id)`);
+  } catch {
+    // ya existe, no pasa nada
+  }
 }
