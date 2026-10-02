@@ -257,6 +257,8 @@ export function initializeDatabase(db: Database.Database) {
       partner_id TEXT,
       invoice_lookback_days INTEGER NOT NULL DEFAULT 30,
       rejected_status_values TEXT NOT NULL DEFAULT '["Rejected","rejected","Rechazada","rechazada"]',
+      iva_allowed_rates TEXT NOT NULL DEFAULT '[0,5,19]',
+      retencion_allowed_rates TEXT NOT NULL DEFAULT '[1,2.5,3.5,4,6,10,11,15,20,25]',
       FOREIGN KEY (office_id) REFERENCES offices(id)
     );
 
@@ -278,4 +280,22 @@ export function initializeDatabase(db: Database.Database) {
       FOREIGN KEY (office_id) REFERENCES offices(id)
     );
   `);
+
+  // --- Legal: chequeos de IVA y retención (tercer incremento sobre Siigo) ---
+  // siigo_config ya existe en producción desde el incremento anterior, así
+  // que estas 2 columnas nuevas necesitan el mismo patrón ALTER TABLE +
+  // try/catch que el resto de columnas agregadas sobre tablas existentes.
+  try {
+    db.exec(`ALTER TABLE siigo_config ADD COLUMN iva_allowed_rates TEXT NOT NULL DEFAULT '[0,5,19]'`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE siigo_config ADD COLUMN retencion_allowed_rates TEXT NOT NULL DEFAULT '[1,2.5,3.5,4,6,10,11,15,20,25]'`
+    );
+  } catch {
+    // ya existe, no pasa nada
+  }
 }
