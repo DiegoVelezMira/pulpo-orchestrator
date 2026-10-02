@@ -31,6 +31,22 @@ const SIIGO_API_BASE = "https://api.siigo.com/v1";
 const DEFAULT_LOOKBACK_DAYS = 30;
 const DEFAULT_REJECTED_VALUES = ["Rejected", "rejected", "Rechazada", "rechazada"];
 
+// Tarifas de IVA vigentes en Colombia (general 19%, reducida 5%, exenta/excluida
+// 0%) — esto sí está confirmado por ley, no depende de la respuesta de Siigo.
+const DEFAULT_IVA_RATES = [0, 5, 19];
+
+// La retención en la fuente, en cambio, varía por concepto (compras, servicios,
+// honorarios, arrendamientos...) y no hay un set fijo único — por eso es
+// configurable por oficina desde el día 1, a diferencia del IVA. Esta lista
+// es un punto de partida razonable, no una tabla oficial memorizada; cada
+// oficina debe ajustarla a los conceptos que realmente maneja.
+const DEFAULT_RETENCION_RATES = [1, 2.5, 3.5, 4, 6, 10, 11, 15, 20, 25];
+
+// Tolerancia de redondeo al comparar "base × tarifa" contra el monto que
+// Siigo reporta como IVA/retención ya calculado. $10 COP cubre redondeos de
+// centavos sin dejar pasar un error real de cálculo.
+const TAX_AMOUNT_TOLERANCE_PESOS = 10;
+
 export type SiigoConfig = {
   office_id: number;
   username: string | null;
@@ -38,6 +54,8 @@ export type SiigoConfig = {
   partner_id: string | null;
   invoice_lookback_days: number;
   rejected_status_values: string[];
+  iva_allowed_rates: number[];
+  retencion_allowed_rates: number[];
 };
 
 type SiigoConfigRow = {
@@ -47,6 +65,8 @@ type SiigoConfigRow = {
   partner_id: string | null;
   invoice_lookback_days: number;
   rejected_status_values: string;
+  iva_allowed_rates: string;
+  retencion_allowed_rates: string;
 };
 
 export function getSiigoConfig(db: Database.Database, officeId: number): SiigoConfig {
@@ -61,6 +81,8 @@ export function getSiigoConfig(db: Database.Database, officeId: number): SiigoCo
       partner_id: null,
       invoice_lookback_days: DEFAULT_LOOKBACK_DAYS,
       rejected_status_values: DEFAULT_REJECTED_VALUES,
+      iva_allowed_rates: DEFAULT_IVA_RATES,
+      retencion_allowed_rates: DEFAULT_RETENCION_RATES,
     };
   }
   return {
@@ -70,6 +92,13 @@ export function getSiigoConfig(db: Database.Database, officeId: number): SiigoCo
     partner_id: row.partner_id,
     invoice_lookback_days: row.invoice_lookback_days,
     rejected_status_values: JSON.parse(row.rejected_status_values),
+    // Filas creadas antes de este incremento no tienen estas 2 columnas
+    // pobladas (existen con DEFAULT a nivel de columna, pero por si acaso
+    // alguna fila vieja quedó con NULL): caemos a los defaults en memoria.
+    iva_allowed_rates: row.iva_allowed_rates ? JSON.parse(row.iva_allowed_rates) : DEFAULT_IVA_RATES,
+    retencion_allowed_rates: row.retencion_allowed_rates
+      ? JSON.parse(row.retencion_allowed_rates)
+      : DEFAULT_RETENCION_RATES,
   };
 }
 
@@ -81,21 +110,26 @@ export function setSiigoConfig(
   const current = getSiigoConfig(db, officeId);
   const merged: SiigoConfig = { ...current, ...partial, office_id: officeId };
   db.prepare(
-    `INSERT INTO siigo_config (office_id, username, access_key, partner_id, invoice_lookback_days, rejected_status_values)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO siigo_config
+       (office_id, username, access_key, partner_id, invoice_lookback_days, rejected_status_values, iva_allowed_rates, retencion_allowed_rates)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(office_id) DO UPDATE SET
        username = excluded.username,
        access_key = excluded.access_key,
        partner_id = excluded.partner_id,
        invoice_lookback_days = excluded.invoice_lookback_days,
-       rejected_status_values = excluded.rejected_status_values`
+       rejected_status_values = excluded.rejected_status_values,
+       iva_allowed_rates = excluded.iva_allowed_rates,
+       retencion_allowed_rates = excluded.retencion_allowed_rates`
   ).run(
     merged.office_id,
     merged.username,
     merged.access_key,
     merged.partner_id,
     merged.invoice_lookback_days,
-    JSON.stringify(merged.rejected_status_values)
+    JSON.stringify(merged.rejected_status_values),
+    JSON.stringify(merged.iva_allowed_rates),
+    JSON.stringify(merged.retencion_allowed_rates)
   );
   return merged;
 }
@@ -154,13 +188,67 @@ function extractStampStatus(invoice: any): string | null {
   return invoice?.stamp?.status ?? invoice?.status ?? null;
 }
 
+type TaxLine = {
+  kind: "iva" | "retencion";
+  base: number;
+  rate: number;
+  declaredAmount: number | null;
+};
+
+// Extrae las líneas de IVA/retención de una factura de forma defensiva, con
+// el mismo criterio que extractStampStatus: la documentación pública del SDK
+// no confirma el nombre exacto de estos campos en una respuesta real, así
+// que probamos las formas más comunes y, si no reconocemos nada, no
+// devolvemos esa línea — preferimos omitir un chequeo antes que adivinar un
+// número y generar una alerta falsa. [No Verificado] hasta probar contra una
+// cuenta real de Siigo.
+//
+// Formas que probamos por cada item de invoice.items[]:
+//   item.taxes[] = [{ name, type, percentage, value? }]
+// Clasificamos por `type`/`name` conteniendo "iva" o "rete"/"retenc" — Siigo
+// usa nombres como "IVA", "Reteiva", "Retefuente", "ReteICA" en su catálogo
+// de impuestos público; cualquier otro impuesto (ICA, INC, etc.) queda fuera
+// de este chequeo a propósito, no es su alcance.
+function extractTaxLines(invoice: any): TaxLine[] {
+  const items: any[] = Array.isArray(invoice?.items) ? invoice.items : [];
+  const lines: TaxLine[] = [];
+
+  for (const item of items) {
+    const base = Number(item?.total ?? (Number(item?.price ?? 0) * Number(item?.quantity ?? 1)));
+    if (!Number.isFinite(base) || base <= 0) continue;
+
+    const taxes: any[] = Array.isArray(item?.taxes) ? item.taxes : [];
+    for (const tax of taxes) {
+      const label = String(tax?.type ?? tax?.name ?? "").toLowerCase();
+      const rate = Number(tax?.percentage);
+      if (!Number.isFinite(rate)) continue;
+
+      const declaredAmount = tax?.value !== undefined && tax?.value !== null ? Number(tax.value) : null;
+
+      if (label.includes("iva")) {
+        lines.push({ kind: "iva", base, rate, declaredAmount });
+      } else if (label.includes("rete") || label.includes("retenc")) {
+        lines.push({ kind: "retencion", base, rate, declaredAmount });
+      }
+    }
+  }
+
+  return lines;
+}
+
 export type DianInvoiceFlag = {
   id: number;
   office_id: number;
   siigo_invoice_id: string;
   invoice_number: string | null;
   customer_name: string | null;
-  check_type: "factura_dian_rechazada" | "factura_dian_sin_timbrar";
+  check_type:
+    | "factura_dian_rechazada"
+    | "factura_dian_sin_timbrar"
+    | "iva_tarifa_invalida"
+    | "iva_monto_inconsistente"
+    | "retencion_tarifa_invalida"
+    | "retencion_monto_inconsistente";
   severity: "warning" | "critical";
   message: string;
   error_detail: string | null;
@@ -226,7 +314,55 @@ export async function runDianComplianceChecks(
       // Sin campo de estado reconocible: no flagueamos (ver nota arriba),
       // pero lo dejamos pasar en silencio — no es evidencia de un problema,
       // es evidencia de que no pudimos leer el campo.
-      continue;
+    }
+
+    // --- IVA y retención: tarifa inválida + inconsistencia aritmética ---
+    // Chequeo independiente del rechazo DIAN de arriba: una factura puede
+    // estar correctamente timbrada y aun así tener un IVA o una retención
+    // mal calculados o con una tarifa que no corresponde a nada vigente.
+    for (const line of extractTaxLines(invoice)) {
+      const allowedRates = line.kind === "iva" ? config.iva_allowed_rates : config.retencion_allowed_rates;
+      const rateLabel = line.kind === "iva" ? "IVA" : "retención";
+
+      if (!allowedRates.includes(line.rate)) {
+        const message = `Factura ${invoiceNumber ?? invoice.id}: tarifa de ${rateLabel} de ${line.rate}% no está en la lista de tarifas permitidas (${allowedRates.join(", ")}%).${
+          customerName ? ` Cliente: ${customerName}.` : ""
+        }`;
+        insert.run(
+          officeId,
+          String(invoice.id),
+          invoiceNumber,
+          customerName,
+          line.kind === "iva" ? "iva_tarifa_invalida" : "retencion_tarifa_invalida",
+          "warning",
+          message,
+          null
+        );
+      }
+
+      if (line.declaredAmount !== null) {
+        const expectedAmount = (line.base * line.rate) / 100;
+        const diff = Math.abs(expectedAmount - line.declaredAmount);
+        if (diff > TAX_AMOUNT_TOLERANCE_PESOS) {
+          const message = `Factura ${invoiceNumber ?? invoice.id}: ${rateLabel} declarado ($${line.declaredAmount.toLocaleString(
+            "es-CO"
+          )}) no coincide con base × tarifa ($${expectedAmount.toLocaleString("es-CO")} esperado sobre una base de $${line.base.toLocaleString(
+            "es-CO"
+          )} al ${line.rate}%).${customerName ? ` Cliente: ${customerName}.` : ""}`;
+          insert.run(
+            officeId,
+            String(invoice.id),
+            invoiceNumber,
+            customerName,
+            line.kind === "iva" ? "iva_monto_inconsistente" : "retencion_monto_inconsistente",
+            "critical",
+            message,
+            null
+          );
+        }
+      }
+      // Si declaredAmount es null, no pudimos leer un monto ya calculado por
+      // Siigo para comparar — solo corre el chequeo de tarifa de arriba.
     }
   }
 
