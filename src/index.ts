@@ -537,18 +537,30 @@ app.get("/offices/:officeId/siigo/config", (req, res) => {
     partner_id: config.partner_id,
     invoice_lookback_days: config.invoice_lookback_days,
     rejected_status_values: config.rejected_status_values,
+    iva_allowed_rates: config.iva_allowed_rates,
+    retencion_allowed_rates: config.retencion_allowed_rates,
   });
 });
 
 app.put("/offices/:officeId/siigo/config", (req, res) => {
   const officeId = parseInt(req.params.officeId);
-  const { username, accessKey, partnerId, invoiceLookbackDays, rejectedStatusValues } = req.body;
+  const {
+    username,
+    accessKey,
+    partnerId,
+    invoiceLookbackDays,
+    rejectedStatusValues,
+    ivaAllowedRates,
+    retencionAllowedRates,
+  } = req.body;
   const updated = setSiigoConfig(db, officeId, {
     ...(username !== undefined ? { username } : {}),
     ...(accessKey !== undefined ? { access_key: accessKey } : {}),
     ...(partnerId !== undefined ? { partner_id: partnerId } : {}),
     ...(invoiceLookbackDays !== undefined ? { invoice_lookback_days: Number(invoiceLookbackDays) } : {}),
     ...(rejectedStatusValues !== undefined ? { rejected_status_values: rejectedStatusValues } : {}),
+    ...(ivaAllowedRates !== undefined ? { iva_allowed_rates: ivaAllowedRates } : {}),
+    ...(retencionAllowedRates !== undefined ? { retencion_allowed_rates: retencionAllowedRates } : {}),
   });
   res.json({
     office_id: updated.office_id,
@@ -557,6 +569,8 @@ app.put("/offices/:officeId/siigo/config", (req, res) => {
     partner_id: updated.partner_id,
     invoice_lookback_days: updated.invoice_lookback_days,
     rejected_status_values: updated.rejected_status_values,
+    iva_allowed_rates: updated.iva_allowed_rates,
+    retencion_allowed_rates: updated.retencion_allowed_rates,
   });
 });
 
