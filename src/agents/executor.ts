@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 dotenv.config();
 import axios from "axios";
+import Database from "better-sqlite3";
+import { retain, recall, reflect } from "./memory-engine";
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 console.log("API Key loaded:", CLAUDE_API_KEY ? "✓ Yes" : "✗ NO");

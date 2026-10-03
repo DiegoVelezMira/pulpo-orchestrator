@@ -316,3 +316,57 @@ export function initializeDatabase(db: Database.Database) {
     // ya existe, no pasa nada
   }
 }
+
+// ============================================================================
+// Memory Banks Schema (Hindsight pattern)
+// ============================================================================
+
+export const addMemoryBanksSchema = (db: Database.Database) => {
+  db.exec(`
+    -- Memory banks: one per office, stores synthesized knowledge
+    CREATE TABLE IF NOT EXISTS memory_banks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER UNIQUE NOT NULL,
+
+      -- Mental models: synthesized knowledge (updated by Claude)
+      tax_rules_model TEXT,
+      transaction_patterns_model TEXT,
+      reconciliation_history_model TEXT,
+
+      -- Recent facts: only last 50 transactions
+      recent_transactions TEXT DEFAULT '[]',
+      entities TEXT DEFAULT '{}',
+
+      -- Metadata
+      last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+      transaction_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+      FOREIGN KEY (office_id) REFERENCES offices(id) ON DELETE CASCADE
+    );
+
+    -- Memory units: individual facts extracted by Claude during retain()
+    CREATE TABLE IF NOT EXISTS memory_units (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_bank_id INTEGER NOT NULL,
+
+      fact_type TEXT,
+      content TEXT,
+      extracted_from_task_id INTEGER,
+
+      model_category TEXT,
+      relevance_score REAL DEFAULT 0.5,
+
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+      FOREIGN KEY (memory_bank_id) REFERENCES memory_banks(id),
+      FOREIGN KEY (extracted_from_task_id) REFERENCES tasks(id)
+    );
+
+    -- Search index for recall()
+    CREATE INDEX IF NOT EXISTS idx_memory_units_bank_category
+      ON memory_units(memory_bank_id, model_category);
+  `);
+
+  console.log("✓ Memory banks schema added");
+};
