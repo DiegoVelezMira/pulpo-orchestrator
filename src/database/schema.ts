@@ -70,6 +70,23 @@ export function initializeDatabase(db: Database.Database) {
     );
   `);
 
+  // Conversaciones: upsert real (ver agents/conversations.ts) — una sola
+  // fila por (office_id, agent_type), reemplazada completa en cada turno de
+  // executeAgent, mismo patrón que "retain full conversation" de Hindsight
+  // (document_id = sesión → upsert reemplaza la versión anterior, nunca
+  // se acumulan duplicados). El índice único es lo que habilita el
+  // ON CONFLICT(office_id, agent_type) del upsert; es seguro crearlo aquí
+  // porque la tabla nunca tuvo escrituras reales antes de este cambio.
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_office_agent ON conversations (office_id, agent_type)`
+  );
+
+  try {
+    db.exec(`ALTER TABLE conversations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`);
+  } catch {
+    // ya existe, no pasa nada
+  }
+
   // Bloque 2 (Drive): columnas nuevas sobre tablas que ya existen en
   // producción. ALTER TABLE no soporta "IF NOT EXISTS" en SQLite, así que
   // se envuelve en try/catch para tolerar reejecutar esto contra una DB

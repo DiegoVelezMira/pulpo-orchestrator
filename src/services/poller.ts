@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { classifyEmail, executeAgent } from "../agents/executor";
 import { getDirective } from "../agents/directives";
 import { listLearnings, formatLearningsForPrompt } from "../agents/learnings";
+import { appendConversationTurn } from "../agents/conversations";
 import {
   listConnectedOffices,
   fetchNewMessages,
@@ -163,6 +164,12 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
 
       try {
         const response = await executeAgent(officeId, classification.agent, emailContent, systemPrompt);
+
+        // Historial de conversación: mismo upsert que /tasks/:id/execute,
+        // para que un correo procesado por el poller deje el mismo rastro
+        // que uno ejecutado manualmente vía API.
+        appendConversationTurn(db, officeId, classification.agent, emailContent, response);
+
         // Mismo patrón que /tasks/:id/execute: si el clasificador marcó
         // needsApproval, queda 'completed' pero con approval_status='pending'
         // en vez de darse por cerrada en silencio.

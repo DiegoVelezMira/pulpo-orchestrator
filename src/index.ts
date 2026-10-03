@@ -11,6 +11,7 @@ import {
   setDirective,
 } from "./agents/directives";
 import { addLearning, listLearnings, formatLearningsForPrompt } from "./agents/learnings";
+import { getConversationMessages, appendConversationTurn } from "./agents/conversations";
 import { getAuthUrl, handleOAuthCallback, getConnection } from "./services/gmail";
 import { getDriveContextForOffice } from "./services/drive";
 import { startGmailPoller } from "./services/poller";
@@ -215,6 +216,11 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
 
     const response = await executeAgent(task.office_id, task.agent_type, task.content, systemPrompt);
 
+    // Historial de conversación: upsert de una sola fila por
+    // (office_id, agent_type) con el turno agregado — mismo patrón "retain"
+    // que describe conversations.ts, nunca una fila nueva por ejecución.
+    appendConversationTurn(db, task.office_id, task.agent_type, task.content, response);
+
     // Bloque 4: una tarea completada no siempre queda cerrada. Si el
     // clasificador marcó needs_approval, queda 'completed' pero con
     // approval_status='pending' — visible en el panel de aprobaciones hasta
@@ -286,13 +292,10 @@ app.get("/offices/:officeId/gmail/status", (req, res) => {
 
 // Get conversation history
 app.get("/offices/:officeId/conversations/:agentType", (req, res) => {
-  const { officeId, agentType } = req.params;
+  const officeId = parseInt(req.params.officeId);
+  const { agentType } = req.params;
 
-  const row = db
-    .prepare("SELECT messages FROM conversations WHERE office_id = ? AND agent_type = ? ORDER BY id DESC LIMIT 1")
-    .get(officeId, agentType) as { messages: string } | undefined;
-
-  res.json(row ? JSON.parse(row.messages) : []);
+  res.json(getConversationMessages(db, officeId, agentType));
 });
 
 // --- Bloque 4: Aprobaciones ---
