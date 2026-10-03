@@ -37,6 +37,10 @@ export function getConversationMessages(
 // reemplaza la fila completa — no inserta una fila nueva por turno. Esto es
 // lo que mantiene "una sola fila por (office_id, agent_type)" en vez de
 // dejar crecer la tabla indefinidamente con una fila por ejecución.
+//
+// Mantiene solo los últimos 25 mensajes (~12-13 turnos ida/vuelta) para evitar
+// inflado de prompt. Sin RECALL semántico (previsto para cuando haya múltiples
+// oficinas activas), este tope de tamaño es suficiente para el volumen actual.
 export function appendConversationTurn(
   db: Database.Database,
   officeId: number,
@@ -46,11 +50,17 @@ export function appendConversationTurn(
 ): ConversationMessage[] {
   const existing = getConversationMessages(db, officeId, agentType);
   const now = new Date().toISOString();
-  const updated: ConversationMessage[] = [
+  let updated: ConversationMessage[] = [
     ...existing,
     { role: "user", content: userContent, created_at: now },
     { role: "assistant", content: assistantContent, created_at: now },
   ];
+
+  // Mantén solo los últimos 25 mensajes; descarta los más viejos.
+  const MAX_MESSAGES = 25;
+  if (updated.length > MAX_MESSAGES) {
+    updated = updated.slice(-MAX_MESSAGES);
+  }
 
   db.prepare(
     `INSERT INTO conversations (office_id, agent_type, messages, updated_at)
