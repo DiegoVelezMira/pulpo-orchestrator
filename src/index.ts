@@ -214,7 +214,7 @@ app.post("/tasks/:taskId/execute", async (req, res) => {
       }
     }
 
-    const response = await executeAgent(db, task.office_id, task.agent_type, task.content, systemPrompt);
+    const response = await executeAgent(db, task.office_id, id, task.agent_type, task.content, systemPrompt);
 
     // Historial de conversación: upsert de una sola fila por
     // (office_id, agent_type) con el turno agregado — mismo patrón "retain"

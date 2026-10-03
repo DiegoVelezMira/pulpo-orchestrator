@@ -2,16 +2,19 @@ import dotenv from "dotenv";
 dotenv.config();
 import axios from "axios";
 import Database from "better-sqlite3";
-import { retain, recall, reflect } from "./memory-engine";
+import { retain, recall, reflect, summarizeMemoryBank } from "../utils/memory-engine";
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 console.log("API Key loaded:", CLAUDE_API_KEY ? "✓ Yes" : "✗ NO");
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 
-// Nota: los system prompts (directivas) ya NO viven hardcodeados aquí.
-// Se leen de la tabla `directives` en SQLite (ver agents/directives.ts) y
-// se reciben como parámetro, para poder ajustarlos sin redeploy y para
-// poder inyectarles aprendizajes acumulados (ver agents/learnings.ts).
+/**
+ * UPDATED EXECUTOR with Memory Bank integration
+ * 
+ * - Full classifyEmail with Drive/Approval/Urgency classification
+ * - executeAgent with Recall/Retain/Reflect memory integration
+ * - Maintains backward compatibility with systemPrompt injection for directives/learnings
+ */
 
 export async function classifyEmail(
   emailContent: string,
@@ -19,25 +22,11 @@ export async function classifyEmail(
 ): Promise<{
   agent: string;
   confidence: number;
-  // Bloque 2 (Drive): el propio clasificador decide si vale la pena ir a
-  // buscar contexto en Drive para este correo — no se consulta Drive en
-  // cada ejecución, solo "cuando el contenido del correo lo amerite"
-  // (ej. menciona un documento, un cliente, una cuenta, pide un anexo).
   needsDriveContext: boolean;
-  // Bloque 4 (Aprobaciones): mismo principio — el clasificador decide si
-  // el resultado de esta tarea debe quedar pendiente de revisión humana
-  // antes de darse por bueno, en vez de auto-resolverse en silencio.
   needsApproval: boolean;
-  // Administrativo extendido: mismo principio otra vez — el clasificador
-  // hace el triage de una vez, en la misma llamada, en vez de una segunda
-  // pasada solo para tickets. Solo tiene significado real cuando
-  // agent="administrativo"; para los demás agentes el clasificador igual
-  // debe devolver algo (usa "otro"/2 por defecto) pero no se usa.
   ticketType: "factura" | "rut" | "datos" | "consulta" | "reclamo" | "otro";
-  urgency: number; // 1 (baja) a 5 (urgente)
+  urgency: number;
 }> {
-  // Atajo determinista: si no hay contenido real, no vale la pena gastar
-  // una llamada al LLM — el resultado sería ruido de todas formas.
   if (!emailContent || !emailContent.trim()) {
     console.log("⚠ Empty content, skipping LLM call");
     return {
@@ -74,7 +63,6 @@ export async function classifyEmail(
     );
 
     let text = response.data.content[0].text.trim();
-    // Remove markdown code blocks if present
     if (text.startsWith("```")) {
       text = text.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
     }
@@ -91,9 +79,6 @@ export async function classifyEmail(
   } catch (error: any) {
     console.error("Classification error:", error.response?.status, error.response?.data || error.message);
     console.error("Raw text that failed to parse:", error.message);
-    // Ante un fallo de clasificación, mejor pecar de cauteloso: se marca
-    // pendiente de aprobación en vez de auto-resolverse sin haber podido
-    // evaluar el riesgo real.
     return {
       agent: "administrativo",
       confidence: 0.5,
@@ -106,7 +91,9 @@ export async function classifyEmail(
 }
 
 export async function executeAgent(
+  db: Database.Database,
   officeId: number,
+  taskId: number,
   agentType: string,
   taskContent: string,
   systemPrompt: string
@@ -116,10 +103,48 @@ export async function executeAgent(
   }
 
   try {
+    // ===== STEP 1: RECALL =====
+    // Get relevant context from this office's memory bank
+    console.log(`\n📚 [RECALL] Fetching memory for office ${officeId}...`);
+    const memoryContext = await recall(db, officeId, taskContent);
+
+    // ===== STEP 2: EXECUTE =====
+    // Build augmented system prompt with memory context + injected directives/learnings
+    const memoryAugmentation = `
+=== OFFICE MEMORY CONTEXT ===
+${
+  memoryContext.relevant_tax_rules
+    ? `Tax Rules for this office:\n${memoryContext.relevant_tax_rules}\n`
+    : ""
+}
+${
+  memoryContext.relevant_patterns
+    ? `Transaction Patterns for this office:\n${memoryContext.relevant_patterns}\n`
+    : ""
+}
+${
+  memoryContext.known_entities.length > 0
+    ? `Known entities in this office:\n${memoryContext.known_entities.join(", ")}\n`
+    : ""
+}
+${
+  memoryContext.recent_similar_transactions.length > 0
+    ? `Recent similar transactions:\n${JSON.stringify(memoryContext.recent_similar_transactions.slice(0, 3), null, 2)}\n`
+    : ""
+}
+
+Use this context to make better decisions. If relevant, reference these facts.
+=== END MEMORY CONTEXT ===
+`;
+
+    const augmentedSystemPrompt = `${systemPrompt}\n\n${memoryAugmentation}`;
+
+    console.log(`🤖 [EXECUTE] Running ${agentType} agent with memory-augmented prompt...`);
+
     const payload = {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1000,
-      system: systemPrompt,
+      system: augmentedSystemPrompt,
       messages: [
         {
           role: "user",
@@ -128,9 +153,10 @@ export async function executeAgent(
       ],
     };
 
-    console.log("=== EXECUTING AGENT ===");
+    console.log("=== EXECUTING AGENT WITH MEMORY ===");
     console.log("Agent Type:", agentType);
     console.log("Office ID:", officeId);
+    console.log("Task ID:", taskId);
     console.log("Task Content:", taskContent.substring(0, 100) + "...");
     console.log("API URL:", CLAUDE_API_URL);
     console.log("API Key present:", CLAUDE_API_KEY ? "✓ Yes" : "✗ NO");
@@ -143,8 +169,26 @@ export async function executeAgent(
       },
     });
 
-    console.log("✓ Success - Response received");
-    return response.data.content[0].text;
+    const agentResponse = response.data.content[0].text;
+    console.log(`✓ [EXECUTE] Agent completed successfully`);
+
+    // ===== STEP 3: RETAIN =====
+    // Extract facts from agent response and store in memory bank
+    console.log(`💾 [RETAIN] Storing new facts in memory bank...`);
+    await retain(db, officeId, taskId, agentType, agentResponse);
+
+    // ===== STEP 4: REFLECT (Optional) =====
+    // Periodically (every N tasks), synthesize facts into mental models
+    const taskCount = (db
+      .prepare("SELECT COUNT(*) as count FROM memory_units WHERE memory_bank_id = (SELECT id FROM memory_banks WHERE office_id = ?)")
+      .get(officeId) as { count: number }).count;
+
+    if (taskCount % 10 === 0) {
+      console.log(`🧠 [REFLECT] Synthesizing knowledge (every 10 tasks)...`);
+      await reflect(db, officeId);
+    }
+
+    return agentResponse;
   } catch (error: any) {
     console.error("❌ EXECUTION ERROR");
     console.error("Status:", error.response?.status);
@@ -156,4 +200,13 @@ export async function executeAgent(
     }
     throw error;
   }
+}
+
+/**
+ * DEBUG: Show what the agent "remembers" about an office
+ */
+export function debugMemory(db: Database.Database, officeId: number): void {
+  console.log("\n=== OFFICE MEMORY DEBUG ===");
+  console.log(summarizeMemoryBank(db, officeId));
+  console.log("===========================\n");
 }

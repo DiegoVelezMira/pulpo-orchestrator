@@ -84,6 +84,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE conversations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -94,12 +95,14 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE gmail_connections ADD COLUMN drive_folder_id TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN drive_context TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -108,6 +111,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN needs_drive_context INTEGER DEFAULT 0`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -162,24 +166,28 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN needs_approval INTEGER DEFAULT 0`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approval_status TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approval_note TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approved_at DATETIME`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -189,6 +197,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approval_notified_at DATETIME`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -204,18 +213,21 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN ticket_type TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN urgency INTEGER`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN client_id INTEGER REFERENCES clients(id)`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -305,6 +317,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE siigo_config ADD COLUMN iva_allowed_rates TEXT NOT NULL DEFAULT '[0,5,19]'`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -315,12 +328,14 @@ export function initializeDatabase(db: Database.Database) {
   } catch {
     // ya existe, no pasa nada
   }
+
+  // Initialize memory banks for Hindsight pattern
+  addMemoryBanksSchema(db);
 }
 
 // ============================================================================
 // Memory Banks Schema (Hindsight pattern)
 // ============================================================================
-
 export const addMemoryBanksSchema = (db: Database.Database) => {
   db.exec(`
     -- Memory banks: one per office, stores synthesized knowledge

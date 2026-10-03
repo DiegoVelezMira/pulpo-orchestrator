@@ -163,7 +163,7 @@ async function processOfficeInbox(db: Database.Database, officeId: number) {
       }
 
       try {
-        const response = await executeAgent(db, officeId, classification.agent, emailContent, systemPrompt);
+        const response = await executeAgent(db, officeId, taskId, classification.agent, emailContent, systemPrompt);
 
         // Historial de conversación: mismo upsert que /tasks/:id/execute,
         // para que un correo procesado por el poller deje el mismo rastro
