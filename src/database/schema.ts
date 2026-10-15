@@ -70,6 +70,24 @@ export function initializeDatabase(db: Database.Database) {
     );
   `);
 
+  // Conversaciones: upsert real (ver agents/conversations.ts) — una sola
+  // fila por (office_id, agent_type), reemplazada completa en cada turno de
+  // executeAgent, mismo patrón que "retain full conversation" de Hindsight
+  // (document_id = sesión → upsert reemplaza la versión anterior, nunca
+  // se acumulan duplicados). El índice único es lo que habilita el
+  // ON CONFLICT(office_id, agent_type) del upsert; es seguro crearlo aquí
+  // porque la tabla nunca tuvo escrituras reales antes de este cambio.
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_office_agent ON conversations (office_id, agent_type)`
+  );
+
+  try {
+    db.exec(`ALTER TABLE conversations ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`);
+  } catch {
+  
+    // ya existe, no pasa nada
+  }
+
   // Bloque 2 (Drive): columnas nuevas sobre tablas que ya existen en
   // producción. ALTER TABLE no soporta "IF NOT EXISTS" en SQLite, así que
   // se envuelve en try/catch para tolerar reejecutar esto contra una DB
@@ -77,12 +95,14 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE gmail_connections ADD COLUMN drive_folder_id TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN drive_context TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -91,6 +111,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN needs_drive_context INTEGER DEFAULT 0`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -145,24 +166,28 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN needs_approval INTEGER DEFAULT 0`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approval_status TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approval_note TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approved_at DATETIME`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -172,6 +197,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN approval_notified_at DATETIME`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -187,18 +213,21 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN ticket_type TEXT`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN urgency INTEGER`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN client_id INTEGER REFERENCES clients(id)`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -288,6 +317,7 @@ export function initializeDatabase(db: Database.Database) {
   try {
     db.exec(`ALTER TABLE siigo_config ADD COLUMN iva_allowed_rates TEXT NOT NULL DEFAULT '[0,5,19]'`);
   } catch {
+  
     // ya existe, no pasa nada
   }
 
@@ -298,4 +328,60 @@ export function initializeDatabase(db: Database.Database) {
   } catch {
     // ya existe, no pasa nada
   }
+
+  // Initialize memory banks for Hindsight pattern
+  addMemoryBanksSchema(db);
 }
+
+// ============================================================================
+// Memory Banks Schema (Hindsight pattern)
+// ============================================================================
+export const addMemoryBanksSchema = (db: Database.Database) => {
+  db.exec(`
+    -- Memory banks: one per office, stores synthesized knowledge
+    CREATE TABLE IF NOT EXISTS memory_banks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      office_id INTEGER UNIQUE NOT NULL,
+
+      -- Mental models: synthesized knowledge (updated by Claude)
+      tax_rules_model TEXT,
+      transaction_patterns_model TEXT,
+      reconciliation_history_model TEXT,
+
+      -- Recent facts: only last 50 transactions
+      recent_transactions TEXT DEFAULT '[]',
+      entities TEXT DEFAULT '{}',
+
+      -- Metadata
+      last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+      transaction_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+      FOREIGN KEY (office_id) REFERENCES offices(id) ON DELETE CASCADE
+    );
+
+    -- Memory units: individual facts extracted by Claude during retain()
+    CREATE TABLE IF NOT EXISTS memory_units (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_bank_id INTEGER NOT NULL,
+
+      fact_type TEXT,
+      content TEXT,
+      extracted_from_task_id INTEGER,
+
+      model_category TEXT,
+      relevance_score REAL DEFAULT 0.5,
+
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+      FOREIGN KEY (memory_bank_id) REFERENCES memory_banks(id),
+      FOREIGN KEY (extracted_from_task_id) REFERENCES tasks(id)
+    );
+
+    -- Search index for recall()
+    CREATE INDEX IF NOT EXISTS idx_memory_units_bank_category
+      ON memory_units(memory_bank_id, model_category);
+  `);
+
+  console.log("✓ Memory banks schema added");
+};
