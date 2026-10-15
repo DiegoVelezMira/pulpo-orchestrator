@@ -31,6 +31,7 @@ import {
   listComplianceFlags,
 } from "./services/legal";
 import { getSiigoConfig, setSiigoConfig, runDianComplianceChecks, listDianInvoiceFlags } from "./services/siigo";
+import crewsRouter from './routes/crews';
 
 dotenv.config();
 
@@ -588,6 +589,10 @@ app.get("/offices/:officeId/siigo/flags", (req, res) => {
   const officeId = parseInt(req.params.officeId);
   res.json(listDianInvoiceFlags(db, officeId));
 });
+
+
+// Crews orquestador de agentes contables
+app.use('/api/crews', crewsRouter);
 
 // Start server
 app.listen(PORT, () => {
