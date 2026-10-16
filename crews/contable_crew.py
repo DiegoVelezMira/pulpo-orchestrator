@@ -24,8 +24,19 @@ logger = logging.getLogger(__name__)
 
 # Inicializar cliente Anthropic
 client = Anthropic()
+def _limpiar_json(texto):
+    """Quita la cerca ```json ... ``` que los modelos suelen agregar."""
+    t = (texto or "").strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        t = t.rstrip()
+        if t.endswith("```"):
+            t = t[:-3]
+    return t.strip()
+
+
 MODEL = "claude-opus-4-6"
-MAX_TOKENS = 2000
+MAX_TOKENS = 6000
 
 
 class ContableAgent:
@@ -56,6 +67,8 @@ Instrucciones:
 3. Cuando no puedas resolver, sugiere escalación
 4. Valida datos según estándares colombianos
 5. Mantén trazabilidad de decisiones
+6. Sé conciso: responde solo con el JSON, sin texto fuera de él y sin repetir el documento original.
+7. En 'detalles' incluye solo lo esencial (máximo 8 campos, textos de máximo 2 frases); 'notas_audit' en máximo 2 frases.
 
 Responde en este formato JSON:
 {{
@@ -75,6 +88,8 @@ Responde en este formato JSON:
                 "content": f"""Procesa este documento contable:
 
 Documento:
+FECHA DE HOY: {datetime.now().strftime('%Y-%m-%d')}. Usala para juzgar si una fecha del documento es futura o pasada.
+
 {json.dumps(document_data, indent=2, ensure_ascii=False)}
 
 Tarea: {task_description}"""
@@ -93,9 +108,19 @@ Tarea: {task_description}"""
                 "content": result_text
             })
             
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                logger.error(f"{self.name}: respuesta cortada por el limite de tokens (MAX_TOKENS={MAX_TOKENS})")
+                return {
+                    "status": "error",
+                    "resultado": "Respuesta cortada por limite de tokens",
+                    "detalles": {"raw_response": result_text, "stop_reason": "max_tokens", "max_tokens": MAX_TOKENS},
+                    "siguiente_paso": "escalación",
+                    "notas_audit": f"Agente {self.name}: la respuesta se corto al llegar a MAX_TOKENS={MAX_TOKENS}. Subir el limite."
+                }
+
             # Parsear JSON de la respuesta
             try:
-                result = json.loads(result_text)
+                result = json.loads(_limpiar_json(result_text))
             except json.JSONDecodeError:
                 logger.warning(f"{self.name} no retornó JSON válido")
                 result = {
