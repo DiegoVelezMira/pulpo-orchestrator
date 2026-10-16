@@ -595,7 +595,7 @@ app.get("/offices/:officeId/siigo/flags", (req, res) => {
 
 
 // Crews orquestador de agentes contables
-app.use('/api/crews', crewsRouter);
+app.use('/api/crews', crewsRouter(db));
 
 // Start server
 app.listen(PORT, () => {

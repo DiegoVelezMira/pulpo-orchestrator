@@ -216,7 +216,10 @@ def calcular(doc, tipo, concepto, hoy=None):
         perfil = doc.get("proveedor_perfil") if isinstance(doc.get("proveedor_perfil"), dict) else {}
         tipo_prov = perfil.get("tipo") or _tipo_proveedor_por_nit(doc.get("nit_proveedor"))
         clave = None
-        if tipo_prov == "persona_juridica":
+        if perfil.get("autorretenedor") is True or perfil.get("regimen_simple") is True:
+            # Reglas especiales (autorretencion del vendedor, regimen SIMPLE, ReteIVA a SIMPLE) no cargadas en v1
+            adv.append("El proveedor es autorretenedor o del regimen SIMPLE: esa regla no esta cargada en v1, requiere revision")
+        elif tipo_prov == "persona_juridica":
             clave = "declarante"
         elif tipo_prov == "persona_natural":
             declarante = perfil.get("declarante_renta")
