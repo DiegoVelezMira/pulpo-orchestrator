@@ -35,7 +35,7 @@ def factura(raiz="Invoice", linea="InvoiceLine", cant="InvoicedQuantity", prov_n
 <cac:TaxTotal><cbc:TaxAmount>114000.00</cbc:TaxAmount><cac:TaxSubtotal><cbc:TaxAmount>114000.00</cbc:TaxAmount>
 <cac:TaxCategory><cbc:Percent>19.00</cbc:Percent><cac:TaxScheme><cbc:ID>01</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal>{extra_impuesto}</cac:TaxTotal>
 <cac:LegalMonetaryTotal><cbc:LineExtensionAmount>{lme}</cbc:LineExtensionAmount>
-<cbc:TaxExclusiveAmount>{'590000.00' if descuento_global else lme}</cbc:TaxExclusiveAmount>
+{'<cbc:AllowanceTotalAmount>10000.00</cbc:AllowanceTotalAmount>' if descuento_global else ''}<cbc:TaxExclusiveAmount>{'590000.00' if descuento_global else lme}</cbc:TaxExclusiveAmount>
 <cbc:TaxInclusiveAmount>714000.00</cbc:TaxInclusiveAmount><cbc:PayableAmount>714000.00</cbc:PayableAmount></cac:LegalMonetaryTotal>
 <cac:{linea}><cbc:ID>1</cbc:ID><cbc:{cant}>10</cbc:{cant}><cbc:LineExtensionAmount>180000.00</cbc:LineExtensionAmount>
 <cac:Item><cbc:Description>Resmas de papel carta</cbc:Description></cac:Item><cac:Price><cbc:PriceAmount>18000.00</cbc:PriceAmount></cac:Price></cac:{linea}>
@@ -90,6 +90,19 @@ class TestXml(unittest.TestCase):
         _, adv = xd.leer_factura(self.escribir("d.xml", factura(extra_impuesto=extra, descuento_global=True)))
         self.assertTrue(any("otros impuestos" in a for a in adv))
         self.assertTrue(any("descuentos" in a for a in adv))
+
+    def test_base_gravable_cero_no_es_el_subtotal(self):
+        x = factura().replace("<cbc:TaxExclusiveAmount>600000.00</cbc:TaxExclusiveAmount>",
+                              "<cbc:TaxExclusiveAmount>0.00</cbc:TaxExclusiveAmount>")
+        crudo, adv = xd.leer_factura(self.escribir("h.xml", x))
+        self.assertEqual(int(crudo["subtotal"]), 600000)
+        self.assertEqual(adv, [])
+
+    def test_total_inconsistente_da_aviso(self):
+        x = factura().replace("<cbc:TaxInclusiveAmount>714000.00</cbc:TaxInclusiveAmount>",
+                              "<cbc:TaxInclusiveAmount>999999.00</cbc:TaxInclusiveAmount>")
+        _, adv = xd.leer_factura(self.escribir("i.xml", x))
+        self.assertTrue(any("no coincide" in a for a in adv))
 
     def test_nota_debito_no_soportada(self):
         with self.assertRaises(ValueError):

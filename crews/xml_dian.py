@@ -130,14 +130,21 @@ def leer_factura(ruta):
         adv.append("El XML trae retenciones (WithholdingTaxTotal): v1 no las usa, se calculan con las reglas")
 
     lmt = _hijo(raiz, "LegalMonetaryTotal")
-    subtotal = _dec(_texto(_hijo(lmt, "TaxExclusiveAmount")))
+    # TaxExclusiveAmount es la BASE GRAVABLE (puede ser 0 en facturas sin impuestos), no el subtotal.
+    # Subtotal = suma de lineas - descuentos globales + cargos globales.
     suma_lineas = _dec(_texto(_hijo(lmt, "LineExtensionAmount")))
+    base_gravable = _dec(_texto(_hijo(lmt, "TaxExclusiveAmount")))
+    descuento = _dec(_texto(_hijo(lmt, "AllowanceTotalAmount"))) or Decimal(0)
+    cargo = _dec(_texto(_hijo(lmt, "ChargeTotalAmount"))) or Decimal(0)
     total = _dec(_texto(_hijo(lmt, "TaxInclusiveAmount")))
     pagable = _dec(_texto(_hijo(lmt, "PayableAmount")))
     if total is None:
         total = pagable
-    if subtotal is not None and suma_lineas is not None and subtotal != suma_lineas:
-        adv.append("Hay descuentos o cargos globales (subtotal distinto de la suma de lineas): revisar")
+    subtotal = (suma_lineas - descuento + cargo) if suma_lineas is not None else base_gravable
+    if descuento != 0 or cargo != 0:
+        adv.append("Hay descuentos o cargos globales (AllowanceTotalAmount/ChargeTotalAmount): revisar")
+    if subtotal is not None and total is not None and abs(subtotal + iva + sum(otros.values(), Decimal(0)) - total) > Decimal(1):
+        adv.append("Subtotal + impuestos no coincide con el total del XML: revisar")
 
     # Lineas
     nombre_linea = "InvoiceLine" if tipo_raiz == "Invoice" else "CreditNoteLine"
