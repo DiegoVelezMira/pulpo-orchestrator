@@ -136,6 +136,28 @@ class TestCalculos(unittest.TestCase):
                   total=523739)
         self.assertFalse(calc(d2)["retefuente"]["aplica"])
 
+    def test_2025_base_minima_depende_de_la_fecha(self):
+        d = doc("X25", fecha="2025-09-10", items=[{"descripcion": "a", "cantidad": 1, "valor_unitario": 952941}],
+                subtotal=952941, iva_19=181059, total=1134000)
+        c = calc(d)                                    # desde 1-jun-2025: 10 UVT = 497.990
+        self.assertEqual((c["uvt"], c["base_minima_pesos"]), (49799, 497990))
+        self.assertEqual(c["retefuente"]["valor"], 23824)   # 2.5% de 952.941 = 23.823,5 -> half-up
+        d_antes = dict(d, fecha="2025-05-31")          # antes: 27 UVT = 1.344.573 -> no retiene
+        c2 = calc(d_antes)
+        self.assertEqual(c2["base_minima_pesos"], 1344573)
+        self.assertFalse(c2["retefuente"]["aplica"])
+
+    def test_2025_frontera_1_de_junio(self):
+        d = doc("F", fecha="2025-06-01", items=[{"descripcion": "a", "cantidad": 1, "valor_unitario": 497990}],
+                subtotal=497990, iva_19=0, total=497990)
+        self.assertTrue(calc(d)["retefuente"]["aplica"])
+        self.assertFalse(calc(dict(d, fecha="2025-05-31"))["retefuente"]["aplica"])
+
+    def test_2022_sigue_sin_uvt(self):
+        c = calc(doc("X22", fecha="2022-11-29", items=[{"descripcion": "a", "cantidad": 1, "valor_unitario": 80780}],
+                     subtotal=80780, iva_19=0, total=80780))
+        self.assertFalse(c["determinable"])
+
     def test_servicios_no_se_calculan(self):
         c = calc(D1, concepto="servicios")
         self.assertFalse(c["determinable"])

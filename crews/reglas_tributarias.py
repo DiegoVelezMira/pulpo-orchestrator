@@ -19,14 +19,18 @@ import re
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
-VERSION_REGLAS = "2026-10-16"
+VERSION_REGLAS = "2026-10-17"
 
 # --- Parametros vigentes (actualizar aqui y solo aqui) -----------------------
+# UVT 2025: Resolucion DIAN 000193 del 4 de diciembre de 2024 ($49.799).
 # UVT 2026: Resolucion DIAN 000238 de 2025, art. 1 ($52.374).
-UVT_POR_ANIO = {2026: 52374}
-# Base minima de retencion en compras: 10 UVT (Decreto 572 de 2025, desde
-# junio de 2025; antes 27 UVT). Fuentes secundarias: RSM Colombia y Gerencie.
+UVT_POR_ANIO = {2025: 49799, 2026: 52374}
+# Base minima de retencion en compras: 10 UVT desde el 1 de junio de 2025
+# (Decreto 572 de 2025, expedido el 28 de mayo de 2025); antes 27 UVT.
+# Fuentes secundarias: RSM Colombia, Gerencie e ITS Contable.
 BASE_MINIMA_COMPRAS_UVT = 10
+BASE_MINIMA_COMPRAS_UVT_ANTERIOR = 27
+FECHA_CAMBIO_BASE_MINIMA = date(2025, 6, 1)
 # Tarifas de retencion en la fuente por compras generales (Gerencie, 2026):
 # personas juridicas y naturales declarantes 2.5%; naturales no declarantes 3.5%.
 TARIFA_RETEFUENTE_COMPRAS = {"declarante": Decimal("0.025"),
@@ -37,6 +41,11 @@ TARIFA_RETEIVA = Decimal("0.15")
 TASAS_IVA = (Decimal("0"), Decimal("0.05"), Decimal("0.19"))
 TOLERANCIA = Decimal("1")  # pesos de diferencia aceptados por redondeo
 # -----------------------------------------------------------------------------
+
+
+def base_minima_uvt(fecha):
+    """UVT de la base minima de retencion en compras segun la fecha de la factura."""
+    return BASE_MINIMA_COMPRAS_UVT_ANTERIOR if fecha < FECHA_CAMBIO_BASE_MINIMA else BASE_MINIMA_COMPRAS_UVT
 
 
 def a_numero(valor):
@@ -195,7 +204,8 @@ def calcular(doc, tipo, concepto, hoy=None):
         return r
 
     uvt = UVT_POR_ANIO[fecha.year]
-    minimo = Decimal(BASE_MINIMA_COMPRAS_UVT * uvt)
+    uvt_base = base_minima_uvt(fecha)
+    minimo = Decimal(uvt_base * uvt)
     r["uvt"] = uvt
     r["base_minima_pesos"] = int(minimo)
     agente_iva = gran or bool(comp.get("agente_reteiva"))
@@ -211,7 +221,7 @@ def calcular(doc, tipo, concepto, hoy=None):
     if not retenedor:
         rf["razon"] = "El comprador no es agente retenedor de renta"
     elif not supera_base:
-        rf["razon"] = f"Base {redondear(base)} menor a la base minima {int(minimo)} ({BASE_MINIMA_COMPRAS_UVT} UVT)"
+        rf["razon"] = f"Base {redondear(base)} menor a la base minima {int(minimo)} ({uvt_base} UVT)"
     else:
         perfil = doc.get("proveedor_perfil") if isinstance(doc.get("proveedor_perfil"), dict) else {}
         tipo_prov = perfil.get("tipo") or _tipo_proveedor_por_nit(doc.get("nit_proveedor"))
