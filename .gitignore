@@ -4,3 +4,7 @@ dist/
 .env
 .DS_Store
 npm-debug.log*
+__pycache__/
+*.pyc
+src/index.ts.backup.*
+src/index.ts.broken.*
