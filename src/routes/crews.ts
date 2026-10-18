@@ -1,6 +1,12 @@
 import express from 'express';
 import Database from 'better-sqlite3';
 import { executeContableCrew } from '../services/crewai-bridge';
+import {
+  crearTablaDocumentos,
+  guardarDocumento,
+  listarDocumentos,
+  obtenerDocumento,
+} from '../services/documentos-procesados';
 
 // Perfil tributario del comprador (la oficina): vive en la base de datos y es la
 // fuente de verdad. Si el POST trae officeId y la oficina tiene perfil, ese perfil
@@ -17,6 +23,8 @@ export function crearCrewsRouter(db: Database.Database) {
       FOREIGN KEY (office_id) REFERENCES offices(id)
     );
   `);
+
+  crearTablaDocumentos(db);
 
   const router = express.Router();
 
@@ -106,6 +114,13 @@ export function crearCrewsRouter(db: Database.Database) {
         ...doc,
       });
 
+      // Registro permanente: si falla el guardado, la respuesta no se pierde.
+      try {
+        guardarDocumento(db, officeId, doc, resultado);
+      } catch (e) {
+        console.error('No se pudo guardar el documento procesado:', e);
+      }
+
       res.json(resultado);
     } catch (error) {
       res.status(500).json({
@@ -113,6 +128,21 @@ export function crearCrewsRouter(db: Database.Database) {
         error: error instanceof Error ? error.message : 'Error desconocido',
       });
     }
+  });
+
+  router.get('/oficinas/:officeId/documentos', (req, res) => {
+    const filtros = {
+      estado: typeof req.query.estado === 'string' ? req.query.estado : undefined,
+      revision: typeof req.query.revision === 'string' ? req.query.revision : undefined,
+    };
+    const docs = listarDocumentos(db, String(req.params.officeId), filtros);
+    res.json({ status: 'ok', total: docs.length, documentos: docs });
+  });
+
+  router.get('/oficinas/:officeId/documentos/:documentoId', (req, res) => {
+    const d = obtenerDocumento(db, String(req.params.officeId), String(req.params.documentoId));
+    if (!d) return res.status(404).json({ status: 'error', error: 'Documento no encontrado' });
+    res.json({ status: 'ok', documento: d });
   });
 
   return router;
