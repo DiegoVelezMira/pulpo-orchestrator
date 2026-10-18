@@ -19,7 +19,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
-VERSION_REGLAS = "2026-10-17"
+VERSION_REGLAS = "2026-10-18"
 
 # --- Parametros vigentes (actualizar aqui y solo aqui) -----------------------
 # UVT 2025: Resolucion DIAN 000193 del 4 de diciembre de 2024 ($49.799).
@@ -31,6 +31,10 @@ UVT_POR_ANIO = {2025: 49799, 2026: 52374}
 BASE_MINIMA_COMPRAS_UVT = 10
 BASE_MINIMA_COMPRAS_UVT_ANTERIOR = 27
 FECHA_CAMBIO_BASE_MINIMA = date(2025, 6, 1)
+# El Consejo de Estado suspendio provisionalmente los arts. 2 a 8 del Decreto 572
+# de 2025 (hacia el 8 de mayo de 2026). Hasta confirmar la base minima vigente
+# con fuente oficial, los documentos desde esa fecha quedan en revision humana.
+FECHA_SUSPENSION_DECRETO_572 = date(2026, 5, 8)
 # Tarifas de retencion en la fuente por compras generales (Gerencie, 2026):
 # personas juridicas y naturales declarantes 2.5%; naturales no declarantes 3.5%.
 TARIFA_RETEFUENTE_COMPRAS = {"declarante": Decimal("0.025"),
@@ -188,6 +192,8 @@ def calcular(doc, tipo, concepto, hoy=None):
         adv.append("Sin fecha valida no se puede fijar la UVT del anio")
     elif fecha.year not in UVT_POR_ANIO:
         adv.append(f"No hay UVT cargada para {fecha.year}")
+    elif fecha >= FECHA_SUSPENSION_DECRETO_572:
+        adv.append("Documento posterior a la suspension del Decreto 572 de 2025 (8-may-2026): la base minima de retencion vigente no esta confirmada, requiere revision")
     if tipo not in ("factura_compra", "nota_credito"):
         adv.append(f"Tipo de documento '{tipo}' no cubierto por el calculador (solo factura de compra y nota credito)")
     if concepto != "bienes":

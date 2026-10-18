@@ -28,7 +28,7 @@ def factura(raiz="Invoice", linea="InvoiceLine", cant="InvoicedQuantity", prov_n
             prov_tipo="1", extra_impuesto="", descuento_global=False):
     lme = "600000.00"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
-<{raiz} {NS}><cbc:ID>FE-12345</cbc:ID><cbc:IssueDate>2026-10-10</cbc:IssueDate>
+<{raiz} {NS}><cbc:ID>FE-12345</cbc:ID><cbc:IssueDate>2026-03-10</cbc:IssueDate>
 <cbc:DocumentCurrencyCode>COP</cbc:DocumentCurrencyCode>
 {parte("Supplier", "Papeleria Real SAS", "900123456", prov_tipo, prov_niveles)}
 {parte("Customer", "Oficina Real SAS", "800999888", "1", "O-13")}
@@ -115,9 +115,9 @@ class TestXml(unittest.TestCase):
         for secreto in ("Papeleria Real", "900123456", "Oficina Real", "800999888", "FE-12345"):
             self.assertNotIn(secreto, txt)
         self.assertEqual(doc["comprador"]["gran_contribuyente"], True)   # O-13 en el XML
-        pre = rt.prevalidar(doc, date(2026, 10, 16))
+        pre = rt.prevalidar(doc, date(2026, 3, 16))
         self.assertEqual(pre["rechazos"], [])
-        c = rt.calcular(doc, "factura_compra", "bienes", date(2026, 10, 16))
+        c = rt.calcular(doc, "factura_compra", "bienes", date(2026, 3, 16))
         self.assertTrue(c["determinable"], c["advertencias"])
         self.assertEqual(c["retefuente"]["valor"], 15000)
         self.assertEqual(c["reteiva"]["valor"], 17100)                   # 15% de 114.000
@@ -131,7 +131,7 @@ class TestXml(unittest.TestCase):
         doc = xd.a_documento(crudo, True, "REAL-002")
         self.assertTrue(doc["proveedor_perfil"]["autorretenedor"])
         self.assertTrue(doc["proveedor_perfil"]["regimen_simple"])
-        c = rt.calcular(doc, "factura_compra", "bienes", date(2026, 10, 16))
+        c = rt.calcular(doc, "factura_compra", "bienes", date(2026, 3, 16))
         self.assertFalse(c["determinable"])
 
     def test_carpeta_con_xml_danado(self):

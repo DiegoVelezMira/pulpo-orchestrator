@@ -28,7 +28,7 @@ ITEMS_PAPEL = [{"descripcion": "Resmas de papel carta", "cantidad": 10, "valor_u
 
 
 def doc(id_, **kw):
-    d = {"id": id_, "tipo": "factura_compra", "fecha": "2026-10-16", "moneda": "COP",
+    d = {"id": id_, "tipo": "factura_compra", "fecha": "2026-03-16", "moneda": "COP",
          "comprador": COMPRADOR, "proveedor": "Papelería El Estudiante S.A.S.",
          "nit_proveedor": "900123456-7"}
     d.update(kw)
@@ -152,6 +152,13 @@ class TestCalculos(unittest.TestCase):
                 subtotal=497990, iva_19=0, total=497990)
         self.assertTrue(calc(d)["retefuente"]["aplica"])
         self.assertFalse(calc(dict(d, fecha="2025-05-31"))["retefuente"]["aplica"])
+
+    def test_desde_suspension_decreto_572_requiere_revision(self):
+        d = dict(D1, fecha="2026-05-08")
+        c = calc(d)
+        self.assertFalse(c["determinable"])
+        self.assertTrue(any("572" in x for x in c["advertencias"]))
+        self.assertTrue(calc(dict(D1, fecha="2026-05-07"))["determinable"])
 
     def test_2022_sigue_sin_uvt(self):
         c = calc(doc("X22", fecha="2022-11-29", items=[{"descripcion": "a", "cantidad": 1, "valor_unitario": 80780}],
