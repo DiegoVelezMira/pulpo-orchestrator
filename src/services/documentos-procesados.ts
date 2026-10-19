@@ -38,6 +38,47 @@ export function crearTablaDocumentos(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_docs_proc_oficina_estado
       ON documentos_procesados (office_id, estado, fecha_documento);
   `);
+  // Migracion: columnas de la revision humana (la tabla puede existir de antes).
+  const cols = (db.prepare('PRAGMA table_info(documentos_procesados)').all() as any[]).map((c) => c.name);
+  for (const [nombre, tipo] of [['revision_nota', 'TEXT'], ['revisado_por', 'TEXT'], ['revisado_at', 'TEXT']]) {
+    if (!cols.includes(nombre)) db.exec(`ALTER TABLE documentos_procesados ADD COLUMN ${nombre} ${tipo}`);
+  }
+}
+
+export type ResultadoRevision =
+  | { ok: true }
+  | { ok: false; codigo: 400 | 404 | 409; error: string };
+
+// Registra la decision de una persona sobre un documento que quedo pendiente.
+// No recalcula nada: 'corregido' deja constancia de lo que se corrigio a mano.
+export function registrarRevision(
+  db: Database.Database,
+  officeId: string,
+  documentoId: string,
+  decision: string,
+  nota: string | undefined,
+  revisor: string | undefined
+): ResultadoRevision {
+  if (decision !== 'aprobado' && decision !== 'corregido') {
+    return { ok: false, codigo: 400, error: "La decision debe ser 'aprobado' o 'corregido'" };
+  }
+  const texto = (nota ?? '').trim();
+  if (decision === 'corregido' && !texto) {
+    return { ok: false, codigo: 400, error: 'Para marcar como corregido hay que explicar que se corrigio (nota)' };
+  }
+  const f = db
+    .prepare('SELECT revision_humana FROM documentos_procesados WHERE office_id = ? AND documento_id = ?')
+    .get(officeId, documentoId) as { revision_humana: string } | undefined;
+  if (!f) return { ok: false, codigo: 404, error: 'Documento no encontrado' };
+  if (f.revision_humana !== 'pendiente') {
+    return { ok: false, codigo: 409, error: `El documento no esta pendiente de revision (estado: ${f.revision_humana})` };
+  }
+  db.prepare(
+    `UPDATE documentos_procesados
+        SET revision_humana = ?, revision_nota = ?, revisado_por = ?, revisado_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE office_id = ? AND documento_id = ?`
+  ).run(decision, texto || null, (revisor ?? '').trim() || null, new Date().toISOString(), officeId, documentoId);
+  return { ok: true };
 }
 
 const num = (v: any): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -80,7 +121,7 @@ export function guardarDocumento(
          reteiva=excluded.reteiva, neto_a_pagar=excluded.neto_a_pagar,
          asiento_json=excluded.asiento_json, motivos_json=excluded.motivos_json,
          documento_json=excluded.documento_json, resultado_json=excluded.resultado_json,
-         version_reglas=excluded.version_reglas, revision_humana=excluded.revision_humana,
+         version_reglas=excluded.version_reglas, revision_humana=excluded.revision_humana, revision_nota=NULL, revisado_por=NULL, revisado_at=NULL,
          procesado_at=excluded.procesado_at, updated_at=CURRENT_TIMESTAMP
        RETURNING id`
     )
@@ -111,7 +152,7 @@ export function guardarDocumento(
 
 const COLUMNAS_LISTA = `id, office_id, documento_id, tipo_documento, fecha_documento, proveedor,
   nit_proveedor, estado, base_gravable, iva, total_factura, retefuente, reteiva, neto_a_pagar,
-  version_reglas, revision_humana, procesado_at`;
+  version_reglas, revision_humana, revision_nota, revisado_por, revisado_at, procesado_at`;
 
 export function listarDocumentos(
   db: Database.Database,

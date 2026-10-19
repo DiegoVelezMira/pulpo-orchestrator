@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisión de documentos</title>
+<style>
+  :root { --fg:#1d2433; --mut:#64708a; --bg:#f6f7fb; --card:#fff; --line:#e2e6f0; --ok:#1f7a4d; --warn:#b45309; --bad:#b42318; --acc:#2347c5; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e8ebf5; --mut:#9aa6c2; --bg:#12151d; --card:#1b2030; --line:#2b3248; --ok:#54c18a; --warn:#f0a548; --bad:#f2786d; --acc:#7d9bff; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:8px 0 12px; }
+  .barra { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+  input, select, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  button { cursor:pointer; } button.p { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.ok { border-color:var(--ok); color:var(--ok); } button.mal { border-color:var(--warn); color:var(--warn); }
+  .doc { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .fila { display:flex; flex-wrap:wrap; justify-content:space-between; gap:6px 16px; }
+  .id { font-weight:600; } .mut { color:var(--mut); font-size:13px; }
+  .tag { display:inline-block; font-size:12px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); }
+  .tag.pendiente { color:var(--warn); border-color:var(--warn); } .tag.aprobado,.tag.corregido { color:var(--ok); border-color:var(--ok); }
+  .tag.rechazado { color:var(--bad); border-color:var(--bad); }
+  .cifras { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:6px; margin:10px 0; }
+  .cifras div { background:var(--bg); border-radius:8px; padding:6px 8px; } .cifras b { display:block; font-size:12px; color:var(--mut); font-weight:500; }
+  ul.mot { margin:6px 0 6px 18px; padding:0; color:var(--warn); }
+  table.as { width:100%; border-collapse:collapse; font-size:13px; margin:6px 0; } table.as td,table.as th { padding:4px 6px; border-bottom:1px solid var(--line); text-align:left; } table.as td.n,table.as th.n { text-align:right; }
+  .acc { display:grid; gap:8px; margin-top:8px; } textarea { width:100%; min-height:54px; }
+  .vacio { text-align:center; color:var(--mut); padding:28px 0; } .err { color:var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Revisión de documentos</h1>
+  <div class="barra">
+    <label>Oficina <input id="oficina" value="prueba-real" size="14"></label>
+    <label>Ver <select id="filtro">
+      <option value="pendiente">Pendientes de revisión</option>
+      <option value="">Todos</option>
+      <option value="aprobado">Aprobados</option>
+      <option value="corregido">Corregidos</option>
+    </select></label>
+    <label>Revisor <input id="revisor" placeholder="tu nombre" size="14"></label>
+    <button class="p" id="cargar">Cargar</button>
+    <span id="msg" class="mut"></span>
+  </div>
+  <div id="lista"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (o) => `/api/crews/oficinas/${encodeURIComponent(o)}/documentos`;
+const pesos = (v) => v == null ? '—' : '$' + Number(v).toLocaleString('es-CO');
+const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+try { $('revisor').value = localStorage.getItem('revisor') || ''; $('oficina').value = localStorage.getItem('oficina') || 'prueba-real'; } catch (e) {}
+
+async function cargar() {
+  const o = $('oficina').value.trim(); if (!o) return;
+  try { localStorage.setItem('oficina', o); } catch (e) {}
+  const f = $('filtro').value;
+  $('msg').textContent = 'Cargando…';
+  try {
+    const r = await fetch(api(o) + (f ? `?revision=${f}` : ''));
+    const j = await r.json();
+    $('msg').textContent = `${j.total} documento(s)`;
+    $('lista').innerHTML = j.total ? j.documentos.map(tarjeta).join('') : '<div class="vacio">No hay documentos en esta vista.</div>';
+  } catch (e) { $('msg').innerHTML = '<span class="err">No se pudo cargar: ' + esc(e.message) + '</span>'; }
+}
+
+function tarjeta(d) {
+  const rev = d.revision_humana;
+  const estado = d.estado === 'rechazado' ? 'rechazado' : rev;
+  return `<div class="doc" data-id="${esc(d.documento_id)}">
+    <div class="fila"><span><span class="id">${esc(d.documento_id)}</span> · ${esc(d.proveedor || 'Sin proveedor')} <span class="mut">NIT ${esc(d.nit_proveedor || '—')}</span></span>
+      <span><span class="tag ${estado}">${esc(rev === 'no_aplica' ? d.estado : rev)}</span> <span class="mut">${esc(d.fecha_documento || '')}</span></span></div>
+    <div class="cifras"><div><b>Base</b>${pesos(d.base_gravable)}</div><div><b>IVA</b>${pesos(d.iva)}</div><div><b>ReteFuente</b>${pesos(d.retefuente)}</div><div><b>ReteIVA</b>${pesos(d.reteiva)}</div><div><b>Neto a pagar</b>${pesos(d.neto_a_pagar)}</div></div>
+    <button onclick="detalle('${esc(d.documento_id)}', this)">Ver motivos y asiento</button>
+    <div class="det"></div></div>`;
+}
+
+async function detalle(id, btn) {
+  const cont = btn.closest('.doc').querySelector('.det');
+  if (cont.innerHTML) { cont.innerHTML = ''; return; }
+  const o = $('oficina').value.trim();
+  const j = await (await fetch(`${api(o)}/${encodeURIComponent(id)}`)).json();
+  const d = j.documento;
+  const mot = (d.motivos || []).length ? '<ul class="mot">' + d.motivos.map((m) => `<li>${esc(m)}</li>`).join('') + '</ul>' : '<p class="mut">Sin motivos de revisión.</p>';
+  const as = Array.isArray(d.asiento) && d.asiento.length
+    ? '<table class="as"><tr><th>Cuenta</th><th class="n">Débito</th><th class="n">Crédito</th></tr>' + d.asiento.map((l) => `<tr><td>${esc(l.cuenta)}</td><td class="n">${pesos(l.debito)}</td><td class="n">${pesos(l.credito)}</td></tr>`).join('') + '</table>'
+    : '<p class="mut">Sin asiento propuesto.</p>';
+  const nota = d.revision_nota ? `<p class="mut">Nota: ${esc(d.revision_nota)}${d.revisado_por ? ' — ' + esc(d.revisado_por) : ''}</p>` : '';
+  const acciones = d.revision_humana === 'pendiente'
+    ? `<div class="acc"><textarea placeholder="Nota (obligatoria si lo marcas como corregido)"></textarea>
+       <div><button class="ok" onclick="decidir('${esc(id)}','aprobado',this)">Aprobar tal cual</button> <button class="mal" onclick="decidir('${esc(id)}','corregido',this)">Marcar como corregido</button></div></div>` : '';
+  cont.innerHTML = mot + as + nota + acciones;
+}
+
+async function decidir(id, decision, btn) {
+  const doc = btn.closest('.doc'); const nota = doc.querySelector('textarea').value;
+  const o = $('oficina').value.trim(); const revisor = $('revisor').value.trim();
+  try { localStorage.setItem('revisor', revisor); } catch (e) {}
+  const r = await fetch(`${api(o)}/${encodeURIComponent(id)}/revision`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, nota, revisor }) });
+  const j = await r.json();
+  if (!r.ok) { $('msg').innerHTML = '<span class="err">' + esc(j.error) + '</span>'; return; }
+  cargar();
+}
+
+$('cargar').onclick = cargar; $('filtro').onchange = cargar;
+cargar();
+</script>
+</body>
+</html>

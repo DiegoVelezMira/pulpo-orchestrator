@@ -6,6 +6,7 @@ import {
   guardarDocumento,
   listarDocumentos,
   obtenerDocumento,
+  registrarRevision,
 } from '../services/documentos-procesados';
 
 // Perfil tributario del comprador (la oficina): vive en la base de datos y es la
@@ -143,6 +144,20 @@ export function crearCrewsRouter(db: Database.Database) {
     const d = obtenerDocumento(db, String(req.params.officeId), String(req.params.documentoId));
     if (!d) return res.status(404).json({ status: 'error', error: 'Documento no encontrado' });
     res.json({ status: 'ok', documento: d });
+  });
+
+  router.post('/oficinas/:officeId/documentos/:documentoId/revision', (req, res) => {
+    const { decision, nota, revisor } = req.body || {};
+    const r = registrarRevision(
+      db,
+      String(req.params.officeId),
+      String(req.params.documentoId),
+      String(decision ?? ''),
+      typeof nota === 'string' ? nota : undefined,
+      typeof revisor === 'string' ? revisor : undefined
+    );
+    if (!r.ok) return res.status(r.codigo).json({ status: 'error', error: r.error });
+    res.json({ status: 'ok', documento: obtenerDocumento(db, String(req.params.officeId), String(req.params.documentoId)) });
   });
 
   return router;
