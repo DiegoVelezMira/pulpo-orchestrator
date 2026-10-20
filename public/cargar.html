@@ -102,9 +102,9 @@ async function cierre(j) {
   const malos = j.items.filter((i) => i.estado === 'error' || i.estado === 'sin_procesar').length;
   $('msg').innerHTML = malos ? `<span class="warn">Lote terminado con ${malos} archivo(s) sin procesar: revisa el detalle y vuelve a subirlos (lo ya procesado se omite).</span>` : 'Lote terminado.';
   const [pend, corr] = await Promise.all([total('pendiente'), total('corregido')]);
-  const o = encodeURIComponent(oficinaActual), desde = encodeURIComponent(j.inicio);
+  const o = encodeURIComponent(oficinaActual), ids = encodeURIComponent(j.items.map((i) => i.documento_id).filter(Boolean).join(','));
   $('cierre').innerHTML = `<div style="margin-top:8px"><a href="/revision.html">Ir a revisión</a> · ` +
-    `<span class="lnk" data-u="/api/crews/oficinas/${o}/documentos/export.csv?desde=${desde}">Descargar asientos de este lote (CSV)</span> · ` +
+    `<span class="lnk" data-u="/api/crews/oficinas/${o}/documentos/export.csv?ids=${ids}">Descargar asientos de este lote (CSV)</span> · ` +
     `<span class="lnk" data-u="/api/crews/oficinas/${o}/documentos/export.csv">Descargar todos los asientos listos (CSV)</span></div>` +
     `<div class="mut" style="margin-top:6px">Fuera del CSV: ${pend} pendiente(s) de revisión y ${corr} corregido(s) (el asiento corregido a mano no se guarda: cárgalo manualmente). ` +
     `Para evitar contabilizar dos veces, importa a Siigo solo el CSV del lote nuevo.</div><div id="aviso" class="mut" style="margin-top:6px"></div>`;

@@ -264,24 +264,24 @@ export function crearCrewsRouter(db: Database.Database) {
 
   // Asientos en CSV (una fila por línea de asiento), separador ';', BOM UTF-8, decimales con coma (Excel es-CO;
   // ?decimal=punto para punto). Por defecto solo lo listo para contabilizar: procesado sin pendientes o aprobado.
-  // Un 'corregido' no se exporta: el asiento guardado es el original, no el corregido a mano. ?desde=ISO limita a
-  // lo procesado desde ese instante (para exportar solo un lote); ?todos=1 incluye todo con su estado.
+  // Un 'corregido' no se exporta: el asiento guardado es el original, no el corregido a mano. ?ids=a,b limita a
+  // esos documentos (para exportar solo un lote); ?todos=1 incluye todo con su estado.
   // Los documentos con asiento ausente o descuadrado se excluyen y se cuentan en la cabecera X-Documentos-Excluidos.
   router.get('/oficinas/:officeId/documentos/export.csv', (req, res) => {
     const todos = req.query.todos === '1';
     const coma = req.query.decimal !== 'punto';
-    const desde =
-      typeof req.query.desde === 'string' && !Number.isNaN(Date.parse(req.query.desde))
-        ? new Date(req.query.desde).toISOString()
+    const ids =
+      typeof req.query.ids === 'string'
+        ? req.query.ids.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200)
         : null;
     const oficina = String(req.params.officeId);
     const filas = db
       .prepare(
         `SELECT documento_id, tipo_documento, fecha_documento, proveedor, nit_proveedor, estado, revision_humana, asiento_json
-           FROM documentos_procesados WHERE office_id = ? ${desde ? 'AND procesado_at >= ?' : ''}
+           FROM documentos_procesados WHERE office_id = ? ${ids ? (ids.length ? `AND documento_id IN (${ids.map(() => '?').join(',')})` : 'AND 0') : ''}
           ORDER BY fecha_documento, documento_id`
       )
-      .all(...(desde ? [oficina, desde] : [oficina])) as any[];
+      .all(...(ids ? [oficina, ...ids] : [oficina])) as any[];
     // Texto: solo lo que viene de fuera (tercero, cuenta) lleva el apóstrofe anti-fórmulas de Excel.
     const texto = (v: any, externo = false) => {
       let t = String(v ?? '');
