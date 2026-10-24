@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import crypto from "crypto";
 import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import { classifyEmail, executeAgent } from "./agents/executor";
@@ -34,6 +33,7 @@ import {
 } from "./services/legal";
 import { getSiigoConfig, setSiigoConfig, runDianComplianceChecks, listDianInvoiceFlags } from "./services/siigo";
 import crewsRouter from './routes/crews';
+import { configurarAcceso, iniciarTablasAcceso } from "./auth/acceso";
 
 dotenv.config();
 
@@ -44,36 +44,16 @@ const PORT = process.env.PORT || 3000;
 const DB_PATH = process.env.DATABASE_PATH || "./pulpo.db";
 const db = new Database(DB_PATH);
 initializeDatabase(db);
+iniciarTablasAcceso(db);
 seedDirectives(db);
 console.log(`✓ Database ready at ${DB_PATH}`);
 
 // Middleware
 
-// Clave de acceso opcional: si PULPO_ACCESS_KEY está definida, todo (menos /health) pide
-// autenticación Basic (usuario cualquiera, contraseña = la clave). Sin la variable, no cambia nada.
-const ACCESS_KEY = process.env.PULPO_ACCESS_KEY;
-// Publicado (túnel/hosting): sin clave larga, el servidor no arranca en vez de quedar abierto.
-if (process.env.PULPO_PUBLIC === "1" && (!ACCESS_KEY || ACCESS_KEY.length < 16)) {
-  console.error("✗ PULPO_PUBLIC=1 exige PULPO_ACCESS_KEY de al menos 16 caracteres. No se inicia.");
-  process.exit(1);
-}
-if (ACCESS_KEY) {
-  const esperado = crypto.createHash("sha256").update(ACCESS_KEY).digest();
-  app.use((req, res, next) => {
-    if (req.path === "/health") return next();
-    const h = req.headers.authorization || "";
-    if (h.startsWith("Basic ")) {
-      const dec = Buffer.from(h.slice(6), "base64").toString("utf8");
-      const clave = dec.slice(dec.indexOf(":") + 1);
-      const recibido = crypto.createHash("sha256").update(clave).digest();
-      if (crypto.timingSafeEqual(esperado, recibido)) return next();
-    }
-    res.set("WWW-Authenticate", 'Basic realm="Pulpo"').status(401).send("Acceso restringido");
-  });
-  console.log("✓ Acceso protegido con clave (PULPO_ACCESS_KEY)");
-}
-
 app.use(express.json({ limit: "25mb" })); // la carga por lote envía el texto de varios XML
+
+// Acceso por oficina: clave compartida + nombre, sesión firmada y administrador aparte (src/auth/acceso.ts).
+configurarAcceso(app, db);
 
 // Interfaz web mínima (archivos estáticos en /public)
 app.use(express.static(path.join(__dirname, "..", "public")));

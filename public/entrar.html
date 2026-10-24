@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar a Pulpo</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--surface-page:#f4f6fa;--surface-card:#fff;--border:#d9dee7;--ink:#1b2333;--ink-muted:#4b5565;--accent:#2b4acb;--accent-hover:#1f38a3;--danger:#b42318;--danger-soft:#fde8e6}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:32px 16px;box-sizing:border-box;background:var(--surface-page);color:var(--ink);font:400 15px/22px "IBM Plex Sans",system-ui,sans-serif}
+.wrap{width:100%;max-width:440px}
+.logo{text-align:center;font-size:28px;line-height:36px;font-weight:600;margin-bottom:24px}
+main{background:var(--surface-card);border:1px solid var(--border);border-radius:12px;box-shadow:0 1px 2px rgba(27,35,51,.06),0 4px 12px rgba(27,35,51,.06);padding:32px}
+.eyebrow{font-size:13px;line-height:18px;font-weight:600;letter-spacing:.04em;color:var(--ink-muted)}
+h1{margin:0;font-size:28px;line-height:36px;font-weight:600}
+p.sub{margin:4px 0 24px;color:var(--ink-muted)}
+label{display:block;font-size:13px;line-height:18px;font-weight:600;margin-bottom:4px}
+input{box-sizing:border-box;width:100%;font:inherit;padding:8px 16px;border:1px solid #8a94a6;border-radius:8px;background:#fff;color:var(--ink)}
+input.bad{border-color:var(--danger)}
+.hint{font-size:13px;line-height:18px;color:var(--ink-muted);margin-top:4px}
+.f{margin-bottom:16px}
+button{width:100%;font:600 15px/22px "IBM Plex Sans",system-ui,sans-serif;padding:8px 16px;border-radius:8px;border:1px solid transparent;background:var(--accent);color:#fff;cursor:pointer;margin-top:8px}
+button:hover{background:var(--accent-hover)}
+button:disabled{background:#8a94a6;cursor:not-allowed}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.err{margin-bottom:16px;padding:12px 16px;border-radius:8px;background:var(--danger-soft);color:var(--danger);font-weight:600}
+.foot{margin:16px 0 0;text-align:center}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">Pulpo</div>
+  <main>
+    <div class="eyebrow" id="eyebrow">OFICINA</div>
+    <h1 id="titulo">Entrar</h1>
+    <p class="sub" id="sub">Escribe tu nombre y la clave de la oficina.</p>
+    <div class="err" id="error" role="alert" hidden></div>
+    <form id="form" novalidate>
+      <div class="f" id="fNombre">
+        <label for="nombre">Tu nombre</label>
+        <input id="nombre" type="text" placeholder="Por ejemplo, Laura" autocomplete="given-name" maxlength="60">
+        <div class="hint">Así quedará escrito en el historial de lo que revises.</div>
+      </div>
+      <div class="f">
+        <label for="clave" id="lClave">Clave de la oficina</label>
+        <input id="clave" type="password" placeholder="••••••••••" autocomplete="current-password">
+      </div>
+      <button type="submit" id="boton">Entrar</button>
+    </form>
+    <p class="foot hint" id="pie"><span id="pieTxt">¿Eres administrador?</span> <a href="#" id="alterna">Entra por aquí</a></p>
+  </main>
+</div>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var oficina = q.get('oficina');
+  var admin = false;
+  var $ = function (id) { return document.getElementById(id); };
+  function mostrarError(t) { $('error').textContent = t; $('error').hidden = !t; $('clave').classList.toggle('bad', !!t); }
+  function modo() {
+    $('eyebrow').textContent = admin ? 'ADMINISTRADOR' : 'OFICINA';
+    $('fNombre').hidden = admin;
+    $('lClave').textContent = admin ? 'Clave de administrador' : 'Clave de la oficina';
+    $('sub').textContent = admin ? 'Escribe la clave de administrador.' : 'Escribe tu nombre y la clave de la oficina.';
+    $('pieTxt').textContent = admin ? '¿Eres de una oficina?' : '¿Eres administrador?';
+    $('titulo').textContent = admin ? 'Administración' : $('titulo').dataset.of || 'Entrar';
+    mostrarError('');
+  }
+  if (oficina) {
+    fetch('/api/acceso/oficina/' + encodeURIComponent(oficina)).then(function (r) { return r.ok ? r.json() : null; }).then(function (o) {
+      if (o) { $('titulo').dataset.of = o.nombre; if (!admin) $('titulo').textContent = o.nombre; }
+      else mostrarError('No encontramos esa oficina. Pide el enlace correcto al administrador.');
+    });
+  } else { $('sub').textContent = 'Usa el enlace de tu oficina, o entra como administrador.'; }
+  $('alterna').addEventListener('click', function (e) { e.preventDefault(); admin = !admin; modo(); });
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var clave = $('clave').value, nombre = $('nombre').value.trim();
+    if (!admin && !oficina) return mostrarError('Usa el enlace de tu oficina para entrar.');
+    if (!admin && !nombre) return mostrarError('Escribe tu nombre.');
+    if (!clave) return mostrarError('Escribe la clave.');
+    $('boton').disabled = true;
+    var url = admin ? '/api/acceso/admin' : '/api/acceso/entrar';
+    var body = admin ? { clave: clave } : { officeId: Number(oficina), nombre: nombre, clave: clave };
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return { r: r, j: j }; }); })
+      .then(function (x) {
+        if (x.r.ok) { location.href = admin ? '/' : '/cargar.html'; return; }
+        mostrarError(x.j.error || 'No se pudo entrar.');
+        $('boton').disabled = x.r.status === 429;
+        $('clave').value = '';
+      })
+      .catch(function () { mostrarError('No hay conexión con Pulpo. Inténtalo de nuevo.'); $('boton').disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>
