@@ -8,7 +8,20 @@ import {
   listarDocumentos,
   obtenerDocumento,
   registrarRevision,
+  guardarDocumentoSinCliente,
 } from '../services/documentos-procesados';
+import {
+  crearTablasClientes,
+  migrarPerfilesDeOficina,
+  crearCliente,
+  obtenerCliente,
+  perfilDeCliente,
+  buscarClientePorNits,
+  aprenderNit,
+  nitBase,
+  estadoPulpo,
+  conteosPorEstado,
+} from '../services/clientes';
 
 // Perfil tributario del comprador (la oficina): vive en la base de datos y es la
 // fuente de verdad. Si el POST trae officeId y la oficina tiene perfil, ese perfil
@@ -27,6 +40,8 @@ export function crearCrewsRouter(db: Database.Database) {
   `);
 
   crearTablaDocumentos(db);
+  crearTablasClientes(db);
+  migrarPerfilesDeOficina(db);
 
   const router = express.Router();
 
@@ -111,10 +126,18 @@ export function crearCrewsRouter(db: Database.Database) {
 
       const doc: Record<string, any> = { ...documento };
       const id = idValido(officeId);
+      let dueno: { clienteId: number; rol: 'comprador' | 'vendedor' } | undefined;
       if (id) {
-        const perfil = leerPerfil(id);
-        if (perfil) {
-          doc.comprador = { ...(doc.comprador || {}), ...perfil };
+        const hallado = buscarClientePorNits(db, id, [
+          { nit: doc.comprador?.nit, rol: 'comprador' },
+          { nit: doc.nit_proveedor, rol: 'vendedor' },
+        ]);
+        if (hallado) {
+          dueno = { clienteId: hallado.cliente.id, rol: hallado.rol };
+          if (hallado.rol === 'comprador') doc.comprador = { ...(doc.comprador || {}), ...perfilDeCliente(hallado.cliente) };
+        } else {
+          const perfil = leerPerfil(id); // perfil único de la oficina (modelo anterior), solo si no hay cliente
+          if (perfil) doc.comprador = { ...(doc.comprador || {}), ...perfil };
         }
       }
 
@@ -125,7 +148,7 @@ export function crearCrewsRouter(db: Database.Database) {
 
       // Registro permanente: si falla el guardado, la respuesta no se pierde.
       try {
-        guardarDocumento(db, officeId, doc, resultado);
+        guardarDocumento(db, officeId, doc, resultado, dueno);
       } catch (e) {
         console.error('No se pudo guardar el documento procesado:', e);
       }
@@ -143,6 +166,8 @@ export function crearCrewsRouter(db: Database.Database) {
     const filtros = {
       estado: typeof req.query.estado === 'string' ? req.query.estado : undefined,
       revision: typeof req.query.revision === 'string' ? req.query.revision : undefined,
+      cliente: idValido(req.query.cliente) ?? undefined,
+      estadoPulpo: typeof req.query.estado_pulpo === 'string' ? req.query.estado_pulpo : undefined,
     };
     const docs = listarDocumentos(db, String(req.params.officeId), filtros);
     res.json({ status: 'ok', total: docs.length, documentos: docs });
@@ -150,7 +175,6 @@ export function crearCrewsRouter(db: Database.Database) {
 
   async function procesarLote(
     lote: Lote,
-    perfil: Record<string, any>,
     archivos: { nombre: string; contenido: string }[],
     reprocesar: boolean
   ) {
@@ -167,23 +191,19 @@ export function crearCrewsRouter(db: Database.Database) {
           continue;
         }
         try {
-          const c = await convertirXml(a.contenido, perfil.agente_retenedor_renta === true, perfil.gran_contribuyente === true);
+          // El XML se lee primero sin perfil: el perfil tributario depende del cliente, y el cliente sale del XML.
+          const c = await convertirXml(a.contenido, false, false);
           if (!c.ok || !c.documento) {
             item.estado = 'no_leido';
             item.detalle = c.error || 'No se pudo leer el XML';
             continue;
           }
-          // El perfil de la oficina manda sobre los indicadores tributarios, pero no sobre la identidad:
-          // si el adquirente del XML no es la oficina, no se contabiliza aquí.
-          const nitXml = String(c.documento.comprador?.nit ?? '').split('-')[0].replace(/\D/g, '');
-          const nitOficina = String(perfil.nit ?? '').split('-')[0].replace(/\D/g, '');
-          if (nitOficina && nitXml && nitXml !== nitOficina) {
-            item.estado = 'no_leido';
-            item.detalle = `El XML es de otro adquirente (NIT ${nitXml}); la oficina es ${nitOficina}`;
-            continue;
-          }
           const doc: Record<string, any> = { ...c.documento };
-          doc.comprador = { ...(doc.comprador || {}), ...perfil };
+          const hallado = buscarClientePorNits(db, lote.officeId, [
+            { nit: doc.comprador?.nit, rol: 'comprador' },
+            { nit: doc.nit_proveedor, rol: 'vendedor' },
+          ]);
+          if (hallado && hallado.rol === 'comprador') doc.comprador = { ...(doc.comprador || {}), ...perfilDeCliente(hallado.cliente) };
           item.documento_id = String(doc.id);
           if (vistos.has(item.documento_id)) {
             item.estado = 'duplicado';
@@ -195,13 +215,20 @@ export function crearCrewsRouter(db: Database.Database) {
             .prepare('SELECT estado, revision_humana FROM documentos_procesados WHERE office_id = ? AND documento_id = ?')
             .get(String(lote.officeId), item.documento_id) as { estado: string; revision_humana: string } | undefined;
           // Lo ya revisado (aprobado/corregido) nunca se pisa; con reprocesar se rehace lo que aún no tiene revisión.
-          if (existe && !(reprocesar && ['no_aplica', 'pendiente'].includes(existe.revision_humana))) {
+          if (existe && !(reprocesar && ['no_aplica', 'pendiente'].includes(existe.revision_humana) && existe.estado !== 'recibido')) {
             item.estado = 'duplicado';
             item.detalle = `Ya estaba registrado (${existe.estado}; revisión: ${existe.revision_humana})`;
             continue;
           }
+          if (!hallado) {
+            // Ningún NIT del documento es de un cliente conocido: queda esperando que una persona elija el cliente.
+            guardarDocumentoSinCliente(db, lote.officeId, doc);
+            item.estado = 'sin_cliente';
+            item.detalle = 'Elige a qué cliente pertenece este documento';
+            continue;
+          }
           const resultado = await executeContableCrew({ id: lote.officeId, ...doc });
-          const guardado = guardarDocumento(db, lote.officeId, doc, resultado);
+          const guardado = guardarDocumento(db, lote.officeId, doc, resultado, { clienteId: hallado.cliente.id, rol: hallado.rol });
           if (guardado === null) {
             // Error de procesamiento (p. ej. sin crédito de la API): no se registra; 2 seguidos frenan el lote.
             item.estado = 'error';
@@ -231,10 +258,6 @@ export function crearCrewsRouter(db: Database.Database) {
     if (!db.prepare('SELECT id FROM offices WHERE id = ?').get(id)) {
       return res.status(404).json({ status: 'error', error: 'La oficina no existe' });
     }
-    const perfil = leerPerfil(id);
-    if (!perfil) {
-      return res.status(400).json({ status: 'error', error: 'La oficina no tiene perfil tributario cargado (PUT /api/crews/oficinas/:id/perfil-tributario)' });
-    }
     if (!Array.isArray(archivos) || archivos.length === 0) {
       return res.status(400).json({ status: 'error', error: 'Envía "archivos": [{ nombre, contenido }]' });
     }
@@ -252,7 +275,7 @@ export function crearCrewsRouter(db: Database.Database) {
     const loteId = randomUUID();
     const lote: Lote = { officeId: id, total: archivos.length, items: [], terminado: false, creado: Date.now() };
     lotes.set(loteId, lote);
-    void procesarLote(lote, perfil, archivos, req.body?.reprocesar === true);
+    void procesarLote(lote, archivos, req.body?.reprocesar === true);
     res.status(202).json({ status: 'ok', loteId, total: lote.total, inicio: inicioIso(lote) });
   });
 
@@ -275,10 +298,11 @@ export function crearCrewsRouter(db: Database.Database) {
         ? req.query.ids.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200)
         : null;
     const oficina = String(req.params.officeId);
+    const clienteExp = idValido(req.query.cliente); // un CSV por cliente: ?cliente=ID
     const filas = db
       .prepare(
         `SELECT documento_id, tipo_documento, fecha_documento, proveedor, nit_proveedor, estado, revision_humana, asiento_json
-           FROM documentos_procesados WHERE office_id = ? ${ids ? (ids.length ? `AND documento_id IN (${ids.map(() => '?').join(',')})` : 'AND 0') : ''}
+           FROM documentos_procesados WHERE office_id = ? ${clienteExp ? 'AND cliente_id = ' + clienteExp : ''} ${ids ? (ids.length ? `AND documento_id IN (${ids.map(() => '?').join(',')})` : 'AND 0') : ''}
           ORDER BY fecha_documento, documento_id`
       )
       .all(...(ids ? [oficina, ...ids] : [oficina])) as any[];
@@ -299,6 +323,7 @@ export function crearCrewsRouter(db: Database.Database) {
       ['fecha', 'documento', 'tipo', 'nit_tercero', 'tercero', 'codigo_cuenta', 'cuenta', 'debito', 'credito', 'estado', 'revision'].join(';'),
     ];
     const excluidos: string[] = [];
+    const exportados: string[] = [];
     for (const f of filas) {
       if (!todos && (f.estado === 'rechazado' || !['no_aplica', 'aprobado'].includes(f.revision_humana))) continue;
       let asiento: any;
@@ -314,6 +339,7 @@ export function crearCrewsRouter(db: Database.Database) {
         excluidos.push(f.documento_id); // monto no numérico o asiento descuadrado
         continue;
       }
+      exportados.push(f.documento_id);
       for (const l of lineas) {
         const codigo = (l.cuenta.match(/^\s*(\d+)/) || [])[1] || '';
         out.push([
@@ -322,7 +348,14 @@ export function crearCrewsRouter(db: Database.Database) {
         ].join(';'));
       }
     }
-    const nombre = `asientos_oficina_${oficina.replace(/[^\w.-]/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
+    // Exportar deja los documentos en Exportado (salvo ?marcar=0 o ?todos=1, que son solo descargas de consulta).
+    if (!todos && req.query.marcar !== '0' && exportados.length) {
+      const ahora = new Date().toISOString();
+      const marca = db.prepare('UPDATE documentos_procesados SET exportado_at = COALESCE(exportado_at, ?), updated_at = CURRENT_TIMESTAMP WHERE office_id = ? AND documento_id = ?');
+      db.transaction(() => { for (const d of exportados) marca.run(ahora, oficina, d); })();
+    }
+    const sufijoCliente = clienteExp ? `_cliente_${clienteExp}` : '';
+    const nombre = `asientos_oficina_${oficina.replace(/[^\w.-]/g, '_')}${sufijoCliente}_${new Date().toISOString().slice(0, 10)}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${nombre}"`);
     res.setHeader('X-Documentos-Excluidos', String(excluidos.length));
@@ -348,6 +381,120 @@ export function crearCrewsRouter(db: Database.Database) {
     );
     if (!r.ok) return res.status(r.codigo).json({ status: 'error', error: r.error });
     res.json({ status: 'ok', documento: obtenerDocumento(db, String(req.params.officeId), String(req.params.documentoId)) });
+  });
+
+  // --- Clientes de la oficina ---
+
+  router.get('/oficinas/:officeId/clientes', (req, res) => {
+    const id = idValido(req.params.officeId);
+    if (!id) return res.status(400).json({ status: 'error', error: 'officeId inválido' });
+    const clientes = db.prepare('SELECT * FROM clientes WHERE office_id = ? ORDER BY nombre').all(id) as any[];
+    const docs = db
+      .prepare('SELECT cliente_id, estado, revision_humana, exportado_at, en_espera, procesado_at FROM documentos_procesados WHERE office_id = ?')
+      .all(String(id)) as any[];
+    const lista = clientes.map((c) => {
+      const suyos = docs.filter((d) => d.cliente_id === c.id).map((d) => ({ ...d, estado_pulpo: estadoPulpo(d) }));
+      return {
+        id: c.id, nit: c.nit, nombre: c.nombre, ...perfilDeCliente(c),
+        conteos: conteosPorEstado(suyos),
+        ultimo_documento: suyos.map((d) => d.procesado_at).sort().pop() ?? null,
+      };
+    });
+    const sinCliente = docs.filter((d) => !d.cliente_id).length;
+    res.json({ status: 'ok', total: lista.length, clientes: lista, documentos_sin_cliente: sinCliente });
+  });
+
+  router.post('/oficinas/:officeId/clientes', (req, res) => {
+    const id = idValido(req.params.officeId);
+    if (!id) return res.status(400).json({ status: 'error', error: 'officeId inválido' });
+    const { nit, nombre, agente_retenedor_renta, gran_contribuyente } = req.body || {};
+    if (!nitBase(nit)) return res.status(400).json({ status: 'error', error: 'Escribe el NIT del cliente.' });
+    if (typeof nombre !== 'string' || !nombre.trim()) return res.status(400).json({ status: 'error', error: 'Escribe el nombre del cliente.' });
+    if (db.prepare('SELECT 1 FROM clientes_nits WHERE office_id = ? AND nit = ?').get(id, nitBase(nit))) {
+      return res.status(409).json({ status: 'error', error: 'Ya hay un cliente con ese NIT en esta oficina.' });
+    }
+    const c = crearCliente(db, id, { nit, nombre, agente_retenedor_renta: agente_retenedor_renta === true, gran_contribuyente: gran_contribuyente === true });
+    res.status(201).json({ status: 'ok', cliente: { id: c.id, nit: c.nit, nombre: c.nombre, ...perfilDeCliente(c) } });
+  });
+
+  router.get('/oficinas/:officeId/clientes/:clienteId', (req, res) => {
+    const id = idValido(req.params.officeId);
+    const c = id ? obtenerCliente(db, id, Number(req.params.clienteId)) : undefined;
+    if (!c) return res.status(404).json({ status: 'error', error: 'Cliente no encontrado' });
+    res.json({ status: 'ok', cliente: { id: c.id, nit: c.nit, nombre: c.nombre, ...perfilDeCliente(c) } });
+  });
+
+  router.put('/oficinas/:officeId/clientes/:clienteId', (req, res) => {
+    const id = idValido(req.params.officeId);
+    const c = id ? obtenerCliente(db, id, Number(req.params.clienteId)) : undefined;
+    if (!id || !c) return res.status(404).json({ status: 'error', error: 'Cliente no encontrado' });
+    const { nombre, agente_retenedor_renta, gran_contribuyente } = req.body || {};
+    if (nombre !== undefined && (typeof nombre !== 'string' || !nombre.trim())) return res.status(400).json({ status: 'error', error: 'El nombre no puede quedar vacío.' });
+    for (const [k, v] of [['agente_retenedor_renta', agente_retenedor_renta], ['gran_contribuyente', gran_contribuyente]]) {
+      if (v !== undefined && typeof v !== 'boolean') return res.status(400).json({ status: 'error', error: `${k} debe ser true o false` });
+    }
+    db.prepare('UPDATE clientes SET nombre = ?, agente_retenedor_renta = ?, gran_contribuyente = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND office_id = ?').run(
+      nombre !== undefined ? nombre.trim() : c.nombre,
+      agente_retenedor_renta !== undefined ? (agente_retenedor_renta ? 1 : 0) : c.agente_retenedor_renta,
+      gran_contribuyente !== undefined ? (gran_contribuyente ? 1 : 0) : c.gran_contribuyente,
+      c.id, id
+    );
+    const n = obtenerCliente(db, id, c.id);
+    res.json({ status: 'ok', cliente: { id: n.id, nit: n.nit, nombre: n.nombre, ...perfilDeCliente(n) } });
+  });
+
+  // La persona elige a qué cliente pertenece un documento que quedó sin cliente. Pulpo aprende el NIT
+  // elegido (el del comprador por defecto, o el que se indique en "nit") y procesa el documento.
+  router.post('/oficinas/:officeId/documentos/:documentoId/cliente', async (req, res) => {
+    const id = idValido(req.params.officeId);
+    if (!id) return res.status(400).json({ status: 'error', error: 'officeId inválido' });
+    const docId = String(req.params.documentoId);
+    const fila = db
+      .prepare('SELECT estado, documento_json FROM documentos_procesados WHERE office_id = ? AND documento_id = ?')
+      .get(String(id), docId) as { estado: string; documento_json: string | null } | undefined;
+    if (!fila) return res.status(404).json({ status: 'error', error: 'Documento no encontrado' });
+    if (fila.estado !== 'sin_cliente') {
+      return res.status(409).json({ status: 'error', error: 'Este documento ya tiene cliente.' });
+    }
+    let doc: Record<string, any>;
+    try { doc = JSON.parse(fila.documento_json || '{}'); } catch { doc = {}; }
+
+    const { clienteId, nuevo, nit } = req.body || {};
+    let cliente: any;
+    if (nuevo && typeof nuevo === 'object') {
+      if (!nitBase(nuevo.nit) || typeof nuevo.nombre !== 'string' || !nuevo.nombre.trim()) {
+        return res.status(400).json({ status: 'error', error: 'Para crear el cliente escribe su NIT y su nombre.' });
+      }
+      if (db.prepare('SELECT 1 FROM clientes_nits WHERE office_id = ? AND nit = ?').get(id, nitBase(nuevo.nit))) {
+        return res.status(409).json({ status: 'error', error: 'Ya hay un cliente con ese NIT en esta oficina.' });
+      }
+      cliente = crearCliente(db, id, {
+        nit: nuevo.nit, nombre: nuevo.nombre,
+        agente_retenedor_renta: nuevo.agente_retenedor_renta === true, gran_contribuyente: nuevo.gran_contribuyente === true,
+      });
+    } else {
+      cliente = obtenerCliente(db, id, Number(clienteId));
+      if (!cliente) return res.status(400).json({ status: 'error', error: 'Elige un cliente de la oficina.' });
+    }
+    const nitComprador = nitBase(doc.comprador?.nit);
+    const nitVendedor = nitBase(doc.nit_proveedor);
+    const nitElegido = nit !== undefined ? nitBase(nit) : (nitComprador || nitVendedor);
+    if (nit !== undefined && nitElegido !== nitComprador && nitElegido !== nitVendedor) {
+      return res.status(400).json({ status: 'error', error: 'Ese NIT no aparece en el documento.' });
+    }
+    const rol: 'comprador' | 'vendedor' = nitElegido === nitVendedor && nitElegido !== nitComprador ? 'vendedor' : 'comprador';
+    if (nitElegido) aprenderNit(db, id, nitElegido, cliente.id);
+    if (rol === 'comprador') doc.comprador = { ...(doc.comprador || {}), ...perfilDeCliente(cliente) };
+    try {
+      const resultado = await executeContableCrew({ id, ...doc });
+      const guardado = guardarDocumento(db, id, doc, resultado, { clienteId: cliente.id, rol });
+      if (guardado === null) {
+        return res.status(502).json({ status: 'error', error: String(resultado?.error ?? 'No se pudo procesar el documento; inténtalo de nuevo.').slice(0, 300), cliente_id: cliente.id });
+      }
+    } catch (e) {
+      return res.status(502).json({ status: 'error', error: (e instanceof Error ? e.message : String(e)).slice(0, 300), cliente_id: cliente.id });
+    }
+    res.json({ status: 'ok', documento: obtenerDocumento(db, String(id), docId) });
   });
 
   return router;

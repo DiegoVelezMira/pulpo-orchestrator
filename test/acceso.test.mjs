@@ -129,8 +129,10 @@ test("peticiones de otro origen no pasan", async () => {
 });
 
 test("el nombre del historial sale de la sesión, no del navegador", async () => {
+  // Un documento solo se revisa si ya tiene cliente.
+  const cli = await (await post(`/api/crews/oficinas/${A}/clientes`, { nit: "900111222-3", nombre: "Cliente de prueba" }, cookieA)).json();
   const db = new Database(dbPath);
-  db.prepare("INSERT INTO documentos_procesados (office_id, documento_id, estado, revision_humana, procesado_at) VALUES (?, 'DOC-1', 'procesado', 'pendiente', ?)").run(String(A), new Date().toISOString());
+  db.prepare("INSERT INTO documentos_procesados (office_id, documento_id, estado, revision_humana, procesado_at, cliente_id) VALUES (?, 'DOC-1', 'procesado', 'pendiente', ?, ?)").run(String(A), new Date().toISOString(), cli.cliente.id);
   db.close();
   const r = await post(`/api/crews/oficinas/${A}/documentos/DOC-1/revision`, { decision: "aprobado", revisor: "Nombre Falso" }, cookieA);
   assert.equal(r.status, 200);
