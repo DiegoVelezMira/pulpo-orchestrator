@@ -32,7 +32,7 @@ before(async () => {
 after(() => { srv?.kill(); rmSync(dir, { recursive: true, force: true }); });
 
 test("sin sesión, las pantallas mandan a Entrar", async () => {
-  for (const p of ["/documentos.html", "/documento.html?id=x", "/cargar.html"]) {
+  for (const p of ["/documentos.html", "/documento.html?id=x", "/cargar.html", "/clientes.html"]) {
     const r = await fetch(BASE + p, { redirect: "manual" });
     assert.equal(r.status, 302, p);
     assert.match(r.headers.get("location"), /^\/entrar\.html/);
@@ -40,7 +40,7 @@ test("sin sesión, las pantallas mandan a Entrar", async () => {
 });
 
 test("con sesión de oficina, las pantallas y sus recursos se sirven", async () => {
-  for (const p of ["/documentos.html", "/documento.html", "/cargar.html", "/pulpo.css", "/pulpo.js", "/revision.html"]) {
+  for (const p of ["/documentos.html", "/documento.html", "/cargar.html", "/clientes.html", "/pulpo.css", "/pulpo.js", "/revision.html"]) {
     const r = await fetch(BASE + p, { headers: { Cookie: cA } });
     assert.equal(r.status, 200, p);
   }

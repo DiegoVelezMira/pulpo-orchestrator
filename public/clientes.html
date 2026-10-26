@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clientes · Pulpo</title>
+<link rel="stylesheet" href="/pulpo.css">
+<style>
+  .fila { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  .fila label { display:grid; gap:4px; font-size:13px; color:var(--muted); }
+  label.chk { display:flex; gap:8px; align-items:center; color:var(--ink); font-size:14px; }
+  .cli { display:grid; gap:10px; }
+  .cli .t { display:flex; flex-wrap:wrap; justify-content:space-between; gap:6px 16px; align-items:baseline; }
+  .conteos { display:flex; flex-wrap:wrap; gap:6px; }
+</style>
+</head>
+<body>
+<main>
+  <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 16px;align-items:end"><h1>Clientes</h1><a id="sinCliente" href="#" hidden></a></div>
+  <div id="msg" hidden></div>
+  <details class="card" id="nuevo">
+    <summary><b>Crear un cliente</b></summary>
+    <form id="form" style="margin-top:12px">
+      <div class="fila">
+        <label>NIT (con dígito de verificación)<input id="nit" required placeholder="901979163-2" autocomplete="off"></label>
+        <label>Nombre o razón social<input id="nombre" required maxlength="120" placeholder="Bruma Home S.A.S." autocomplete="off" style="min-width:260px"></label>
+      </div>
+      <div class="fila" style="margin-top:10px">
+        <label class="chk"><input type="checkbox" id="ret"> Agente retenedor de renta</label>
+        <label class="chk"><input type="checkbox" id="gran"> Gran contribuyente</label>
+        <button class="p" type="submit" id="crear">Crear cliente</button>
+      </div>
+    </form>
+  </details>
+  <div id="lista" style="display:grid;gap:12px"><div class="card vacio">Cargando…</div></div>
+</main>
+<script src="/pulpo.js"></script>
+<script>
+(function () {
+  var P = window.Pulpo, esc = P.esc, ctx, sufijo = '';
+  var $ = function (id) { return document.getElementById(id); };
+  function base() { return '/api/crews/oficinas/' + ctx.oficinaId; }
+  function msg(html, cls) { $('msg').className = cls || 'aviso'; $('msg').innerHTML = html; $('msg').hidden = !html; }
+
+  function pintar(r) {
+    if (r.documentos_sin_cliente) { $('sinCliente').hidden = false; $('sinCliente').href = '/documentos.html' + sufijo; $('sinCliente').textContent = r.documentos_sin_cliente + ' documento(s) sin cliente: ver en Documentos'; }
+    else $('sinCliente').hidden = true;
+    if (!r.clientes.length) { $('lista').innerHTML = '<div class="card vacio">Todavía no hay clientes. Crea el primero arriba con su NIT: así las facturas quedan asignadas solas.</div>'; $('nuevo').open = true; return; }
+    $('lista').innerHTML = r.clientes.map(function (c) {
+      var k = c.conteos || {};
+      var pills = ['recibido', 'leido', 'necesita_ayuda', 'en_espera', 'revisado', 'exportado'].filter(function (e) { return k[e]; })
+        .map(function (e) { return P.pill(e) + ' <b>' + k[e] + '</b>'; }).join(' ') || '<span class="muted">Sin documentos todavía.</span>';
+      return '<section class="card cli" data-id="' + c.id + '"><div class="t"><h2 style="margin:0">' + esc(c.nombre) + '</h2><span class="mono">NIT ' + esc(c.nit) + '</span></div>' +
+        '<div class="conteos">' + pills + '</div>' +
+        '<div class="fila"><label>Nombre<input class="n" value="' + esc(c.nombre) + '" maxlength="120" style="min-width:240px"></label>' +
+        '<label class="chk"><input type="checkbox" class="r"' + (c.agente_retenedor_renta ? ' checked' : '') + '> Agente retenedor de renta</label>' +
+        '<label class="chk"><input type="checkbox" class="g"' + (c.gran_contribuyente ? ' checked' : '') + '> Gran contribuyente</label>' +
+        '<button type="button" class="gu">Guardar cambios</button>' +
+        '<a href="/documentos.html' + sufijo + '">Ver documentos</a></div></section>';
+    }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('section.cli'), function (s) {
+      s.querySelector('.gu').onclick = function () {
+        P.api(base() + '/clientes/' + s.getAttribute('data-id'), { method: 'PUT', body: {
+          nombre: s.querySelector('.n').value, agente_retenedor_renta: s.querySelector('.r').checked, gran_contribuyente: s.querySelector('.g').checked } })
+          .then(function () { msg('Cambios guardados.', 'ok'); return cargar(); })
+          .catch(function (e) { msg(esc(e.message)); });
+      };
+    });
+  }
+  function cargar() { return P.api(base() + '/clientes').then(pintar).catch(function (e) { $('lista').innerHTML = '<div class="card vacio err">' + esc(e.message) + '</div>'; }); }
+
+  $('form').addEventListener('submit', function (ev) {
+    ev.preventDefault(); $('crear').disabled = true;
+    P.api(base() + '/clientes', { method: 'POST', body: { nit: $('nit').value, nombre: $('nombre').value, agente_retenedor_renta: $('ret').checked, gran_contribuyente: $('gran').checked } })
+      .then(function (j) { $('form').reset(); $('nuevo').open = false; msg('Cliente creado: ' + esc(j.cliente.nombre) + ' (las facturas con su NIT quedarán asignadas solas).', 'ok'); return cargar(); })
+      .catch(function (e) { msg(esc(e.message)); })
+      .then(function () { $('crear').disabled = false; });
+  });
+
+  P.iniciar('clientes.html').then(function (c) { ctx = c; sufijo = c.admin ? '?oficina=' + c.oficinaId : ''; cargar(); });
+})();
+</script>
+</body>
+</html>

@@ -25,7 +25,7 @@
       var oficinaId = s.oficina ? s.oficina.id : Number(q.get('oficina')) || null;
       var info = { oficinaId: oficinaId, oficinaNombre: s.oficina ? s.oficina.nombre : '', nombre: s.nombre, admin: s.rol === 'admin' };
       var sufijo = info.admin && oficinaId ? '?oficina=' + oficinaId : '';
-      var nav = [['documentos.html', 'Documentos'], ['cargar.html', 'Cargar']].map(function (n) {
+      var nav = [['documentos.html', 'Documentos'], ['cargar.html', 'Cargar'], ['clientes.html', 'Clientes']].map(function (n) {
         return '<a class="n" href="/' + n[0] + sufijo + '"' + (n[0] === actual ? ' aria-current="page"' : '') + '>' + n[1] + '</a>';
       }).join('');
       var top = document.createElement('header');
