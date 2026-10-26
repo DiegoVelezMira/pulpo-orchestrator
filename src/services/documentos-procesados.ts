@@ -41,7 +41,7 @@ export function crearTablaDocumentos(db: Database.Database) {
   `);
   // Migracion: columnas de la revision humana (la tabla puede existir de antes).
   const cols = (db.prepare('PRAGMA table_info(documentos_procesados)').all() as any[]).map((c) => c.name);
-  for (const [nombre, tipo] of [['revision_nota', 'TEXT'], ['revisado_por', 'TEXT'], ['revisado_at', 'TEXT'], ['cliente_id', 'INTEGER'], ['rol_cliente', 'TEXT'], ['exportado_at', 'TEXT'], ['en_espera', 'INTEGER NOT NULL DEFAULT 0'], ['origen', 'TEXT']]) {
+  for (const [nombre, tipo] of [['revision_nota', 'TEXT'], ['revisado_por', 'TEXT'], ['revisado_at', 'TEXT'], ['cliente_id', 'INTEGER'], ['rol_cliente', 'TEXT'], ['exportado_at', 'TEXT'], ['en_espera', 'INTEGER NOT NULL DEFAULT 0'], ['origen', 'TEXT'], ['cufe', 'TEXT'], ['huella', 'TEXT'], ['nombre_archivo', 'TEXT'], ['texto_pdf', 'TEXT']]) {
     if (!cols.includes(nombre)) db.exec(`ALTER TABLE documentos_procesados ADD COLUMN ${nombre} ${tipo}`);
   }
 }
@@ -231,4 +231,49 @@ export function obtenerDocumento(db: Database.Database, officeId: string, docume
   const { asiento_json, motivos_json, documento_json, resultado_json, ...resto } = f;
   return { ...resto, estado_pulpo: estadoPulpo(f as any), asiento: j(asiento_json), motivos: j(motivos_json) ?? [],
            documento: j(documento_json), resultado: j(resultado_json) };
+}
+
+// ---- PDF: filas que aún no tienen documento completo ----
+
+// Marca el origen de un documento ya guardado (PDF leído con IA).
+export function marcarOrigenPdf(db: Database.Database, officeId: string | number, documentoId: string, m: { cufe: string | null; huella: string; nombre: string }) {
+  db.prepare("UPDATE documentos_procesados SET origen = 'pdf', cufe = ?, huella = ?, nombre_archivo = ? WHERE office_id = ? AND documento_id = ?")
+    .run(m.cufe, m.huella, m.nombre, String(officeId), documentoId);
+}
+
+// ¿Este PDF (mismo archivo o mismo CUFE) ya está registrado en la oficina?
+export function pdfYaRegistrado(db: Database.Database, officeId: string | number, huella: string, cufe: string | null, excluir?: string) {
+  return db
+    .prepare('SELECT documento_id, estado, en_espera FROM documentos_procesados WHERE office_id = ? AND (huella = ? OR (? IS NOT NULL AND cufe = ?)) AND documento_id <> ? LIMIT 1')
+    .get(String(officeId), huella, cufe, cufe, excluir ?? '') as { documento_id: string; estado: string; en_espera: number } | undefined;
+}
+
+// PDF recibido que no se pudo (o no se pudo todavía) leer: sin texto (escaneado) o esperando cupo del tope.
+export function guardarPdfPendiente(
+  db: Database.Database,
+  officeId: string | number,
+  p: { huella: string; cufe: string | null; nombre: string; estado: 'recibido' | 'ilegible'; enEspera: boolean; motivo: string; texto?: string }
+): string {
+  const documentoId = `pdf-${p.huella.slice(0, 16)}`;
+  db.prepare(
+    `INSERT INTO documentos_procesados
+      (office_id, documento_id, tipo_documento, estado, motivos_json, revision_humana, procesado_at, en_espera, origen, cufe, huella, nombre_archivo, texto_pdf)
+     VALUES (@o, @d, 'pdf', @estado, @motivos, 'pendiente', @ahora, @espera, 'pdf', @cufe, @huella, @nombre, @texto)
+     ON CONFLICT(office_id, documento_id) DO UPDATE SET estado=excluded.estado, motivos_json=excluded.motivos_json,
+       en_espera=excluded.en_espera, texto_pdf=excluded.texto_pdf, updated_at=CURRENT_TIMESTAMP`
+  ).run({
+    o: String(officeId), d: documentoId, estado: p.estado, motivos: JSON.stringify([p.motivo]), ahora: new Date().toISOString(),
+    espera: p.enEspera ? 1 : 0, cufe: p.cufe, huella: p.huella, nombre: p.nombre.slice(0, 200), texto: p.texto ?? null,
+  });
+  return documentoId;
+}
+
+export function pdfsEnEspera(db: Database.Database, officeId: string | number) {
+  return db
+    .prepare("SELECT documento_id, huella, cufe, nombre_archivo, texto_pdf FROM documentos_procesados WHERE office_id = ? AND en_espera = 1 AND estado = 'recibido' AND texto_pdf IS NOT NULL ORDER BY id")
+    .all(String(officeId)) as { documento_id: string; huella: string; cufe: string | null; nombre_archivo: string; texto_pdf: string }[];
+}
+
+export function borrarMarcador(db: Database.Database, officeId: string | number, documentoId: string) {
+  db.prepare("DELETE FROM documentos_procesados WHERE office_id = ? AND documento_id = ? AND estado IN ('recibido','ilegible')").run(String(officeId), documentoId);
 }

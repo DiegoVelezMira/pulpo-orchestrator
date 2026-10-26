@@ -9,7 +9,15 @@ import {
   obtenerDocumento,
   registrarRevision,
   guardarDocumentoSinCliente,
+  marcarOrigenPdf,
+  pdfYaRegistrado,
+  guardarPdfPendiente,
+  pdfsEnEspera,
+  borrarMarcador,
 } from '../services/documentos-procesados';
+import { extraerTexto, tieneTexto, cufeLocal, huellaPdf, contrastar, alertasDeFechas, aDocumento, MAX_PDF_BYTES } from '../services/pdf-lector';
+import { leerConIa } from '../services/lector-ia';
+import { iniciarTope, estadoTope, hayCupo, registrarLectura } from '../services/tope';
 import {
   crearTablasClientes,
   migrarPerfilesDeOficina,
@@ -40,6 +48,7 @@ export function crearCrewsRouter(db: Database.Database) {
   `);
 
   crearTablaDocumentos(db);
+  iniciarTope(db);
   crearTablasClientes(db);
   migrarPerfilesDeOficina(db);
 
@@ -173,77 +182,148 @@ export function crearCrewsRouter(db: Database.Database) {
     res.json({ status: 'ok', total: docs.length, documentos: docs });
   });
 
-  async function procesarLote(
-    lote: Lote,
-    archivos: { nombre: string; contenido: string }[],
-    reprocesar: boolean
-  ) {
-    let detenido = false;
-    let seguidos = 0; // errores de procesamiento consecutivos
-    const vistos = new Set<string>(); // ids ya tratados en este lote
+  type ArchivoLote = { nombre: string; contenido?: string; pdf?: Buffer; textoPdf?: string; huella?: string; marcador?: string };
+  type Ctx = { vistos: Set<string>; reprocesar: boolean; seguidos: number; detenido: boolean };
+
+  // Tramo común a XML y PDF: dueño del documento -> crew -> guardado. Devuelve true si fue un error de procesamiento.
+  async function tratarDocumento(
+    lote: Lote, item: ItemLote, doc: Record<string, any>, ctx: Ctx,
+    pdf?: { huella: string; cufe: string | null; nombre: string; hallazgos: string[] }
+  ): Promise<boolean> {
+    const hallado = buscarClientePorNits(db, lote.officeId, [
+      { nit: doc.comprador?.nit, rol: 'comprador' },
+      { nit: doc.nit_proveedor, rol: 'vendedor' },
+    ]);
+    if (hallado && hallado.rol === 'comprador') doc.comprador = { ...(doc.comprador || {}), ...perfilDeCliente(hallado.cliente) };
+    item.documento_id = String(doc.id);
+    if (ctx.vistos.has(item.documento_id)) {
+      item.estado = 'duplicado';
+      item.detalle = 'Repetido dentro de este mismo lote';
+      return false;
+    }
+    ctx.vistos.add(item.documento_id);
+    const existe = db
+      .prepare('SELECT estado, revision_humana FROM documentos_procesados WHERE office_id = ? AND documento_id = ?')
+      .get(String(lote.officeId), item.documento_id) as { estado: string; revision_humana: string } | undefined;
+    // Lo ya revisado (aprobado/corregido) nunca se pisa; con reprocesar se rehace lo que aún no tiene revisión.
+    if (existe && !(ctx.reprocesar && ['no_aplica', 'pendiente'].includes(existe.revision_humana) && existe.estado !== 'recibido')) {
+      item.estado = 'duplicado';
+      item.detalle = `Ya estaba registrado (${existe.estado}; revisión: ${existe.revision_humana})`;
+      return false;
+    }
+    if (!hallado) {
+      // Ningún NIT del documento es de un cliente conocido: queda esperando que una persona elija el cliente.
+      guardarDocumentoSinCliente(db, lote.officeId, doc);
+      if (pdf) marcarOrigenPdf(db, lote.officeId, item.documento_id, pdf);
+      item.estado = 'sin_cliente';
+      item.detalle = 'Elige a qué cliente pertenece este documento';
+      return false;
+    }
+    const dueno = { clienteId: hallado.cliente.id, rol: hallado.rol };
+    if (pdf && pdf.hallazgos.length) {
+      // La lectura con IA no pasó el contraste con el texto: no se contabiliza sola, queda para una persona.
+      guardarDocumento(db, lote.officeId, doc, {
+        status: 'requiere_revision', documento_id: doc.id, motivos_revision: pdf.hallazgos, timestamp: new Date().toISOString(),
+      }, dueno);
+      marcarOrigenPdf(db, lote.officeId, item.documento_id, pdf);
+      item.estado = 'requiere_revision';
+      item.detalle = pdf.hallazgos[0].slice(0, 300);
+      return false;
+    }
+    const resultado = await executeContableCrew({ id: lote.officeId, ...doc });
+    const guardado = guardarDocumento(db, lote.officeId, doc, resultado, dueno);
+    if (guardado === null) {
+      // Error de procesamiento (p. ej. sin crédito de la API): no se registra; 2 seguidos frenan el lote.
+      item.estado = 'error';
+      item.detalle = String(resultado?.error ?? resultado?.status ?? 'Error de procesamiento').slice(0, 300);
+      return true;
+    }
+    if (pdf) marcarOrigenPdf(db, lote.officeId, item.documento_id, pdf);
+    item.estado = String(resultado.status);
+    const m = resultado.motivos_revision ?? resultado.detalles?.motivos;
+    if (Array.isArray(m) && m.length) item.detalle = String(m[0]).slice(0, 300);
+    return false;
+  }
+
+  // Un PDF: texto local -> CUFE local -> (cupo del tope) -> IA con solo texto -> contraste -> tramo común.
+  async function tratarPdf(lote: Lote, item: ItemLote, a: ArchivoLote, ctx: Ctx): Promise<boolean> {
+    const huella = a.huella ?? huellaPdf(a.pdf!);
+    const texto = a.textoPdf ?? (await extraerTexto(a.pdf!));
+    if (!tieneTexto(texto)) {
+      const prev = pdfYaRegistrado(db, lote.officeId, huella, null);
+      if (prev) { item.estado = 'duplicado'; item.detalle = 'Este PDF ya estaba registrado'; return false; }
+      item.documento_id = guardarPdfPendiente(db, lote.officeId, { huella, cufe: null, nombre: a.nombre, estado: 'ilegible', enEspera: false, motivo: 'PDF sin texto (probablemente escaneado): súbelo en XML o escríbelo a mano' });
+      item.estado = 'no_leido';
+      item.detalle = 'PDF sin texto (probablemente escaneado)';
+      return false;
+    }
+    const cufe = cufeLocal(texto);
+    const prev = pdfYaRegistrado(db, lote.officeId, huella, cufe, a.marcador);
+    if (prev) {
+      item.estado = 'duplicado';
+      item.documento_id = prev.documento_id;
+      item.detalle = `Ya estaba registrado (${prev.en_espera ? 'en espera por tope' : prev.estado})`;
+      return false;
+    }
+    if (!hayCupo(db, lote.officeId)) {
+      item.documento_id = guardarPdfPendiente(db, lote.officeId, { huella, cufe, nombre: a.nombre, estado: 'recibido', enEspera: true, motivo: 'En espera por tope: se leerá cuando haya cupo', texto });
+      item.estado = 'en_espera';
+      item.detalle = 'Se alcanzó el tope mensual de PDF leídos con IA';
+      return false;
+    }
+    const lectura = await leerConIa(texto);
+    registrarLectura(db, lote.officeId, huella, lectura.modelo, lectura.tokens_in, lectura.tokens_out);
+    const ia = lectura.json;
+    if (ia.tipo && !['factura', 'nota_credito'].includes(String(ia.tipo))) {
+      item.estado = 'no_leido';
+      item.detalle = `Tipo de documento '${ia.tipo}' aún no se contabiliza automáticamente`;
+      item.documento_id = guardarPdfPendiente(db, lote.officeId, { huella, cufe, nombre: a.nombre, estado: 'ilegible', enEspera: false, motivo: item.detalle });
+      return false;
+    }
+    const hoy = new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
+    const hallazgos = [...contrastar(texto, ia, cufe).map((h) => h.mensaje), ...alertasDeFechas(ia, hoy)];
+    if (!ia.numero || !ia.emisor_nit) {
+      item.estado = 'no_leido';
+      item.detalle = 'No se pudo leer el número o el NIT del emisor';
+      item.documento_id = guardarPdfPendiente(db, lote.officeId, { huella, cufe, nombre: a.nombre, estado: 'ilegible', enEspera: false, motivo: item.detalle });
+      return false;
+    }
+    const doc = aDocumento({ ...ia, cufe: cufe ?? ia.cufe });
+    return tratarDocumento(lote, item, doc, ctx, { huella, cufe, nombre: a.nombre, hallazgos });
+  }
+
+  async function procesarLote(lote: Lote, archivos: ArchivoLote[], reprocesar: boolean) {
+    const ctx: Ctx = { vistos: new Set<string>(), reprocesar, seguidos: 0, detenido: false };
     try {
       for (const a of archivos) {
         const item: ItemLote = { nombre: a.nombre.slice(0, 200), estado: 'procesando' };
         lote.items.push(item);
-        if (detenido) {
+        if (ctx.detenido) {
           item.estado = 'sin_procesar';
           item.detalle = 'El lote se detuvo tras 2 errores seguidos de procesamiento (p. ej. sin crédito de la API); vuelve a subirlo (lo ya procesado se omite)';
           continue;
         }
         try {
-          // El XML se lee primero sin perfil: el perfil tributario depende del cliente, y el cliente sale del XML.
-          const c = await convertirXml(a.contenido, false, false);
-          if (!c.ok || !c.documento) {
-            item.estado = 'no_leido';
-            item.detalle = c.error || 'No se pudo leer el XML';
-            continue;
-          }
-          const doc: Record<string, any> = { ...c.documento };
-          const hallado = buscarClientePorNits(db, lote.officeId, [
-            { nit: doc.comprador?.nit, rol: 'comprador' },
-            { nit: doc.nit_proveedor, rol: 'vendedor' },
-          ]);
-          if (hallado && hallado.rol === 'comprador') doc.comprador = { ...(doc.comprador || {}), ...perfilDeCliente(hallado.cliente) };
-          item.documento_id = String(doc.id);
-          if (vistos.has(item.documento_id)) {
-            item.estado = 'duplicado';
-            item.detalle = 'Repetido dentro de este mismo lote';
-            continue;
-          }
-          vistos.add(item.documento_id);
-          const existe = db
-            .prepare('SELECT estado, revision_humana FROM documentos_procesados WHERE office_id = ? AND documento_id = ?')
-            .get(String(lote.officeId), item.documento_id) as { estado: string; revision_humana: string } | undefined;
-          // Lo ya revisado (aprobado/corregido) nunca se pisa; con reprocesar se rehace lo que aún no tiene revisión.
-          if (existe && !(reprocesar && ['no_aplica', 'pendiente'].includes(existe.revision_humana) && existe.estado !== 'recibido')) {
-            item.estado = 'duplicado';
-            item.detalle = `Ya estaba registrado (${existe.estado}; revisión: ${existe.revision_humana})`;
-            continue;
-          }
-          if (!hallado) {
-            // Ningún NIT del documento es de un cliente conocido: queda esperando que una persona elija el cliente.
-            guardarDocumentoSinCliente(db, lote.officeId, doc);
-            item.estado = 'sin_cliente';
-            item.detalle = 'Elige a qué cliente pertenece este documento';
-            continue;
-          }
-          const resultado = await executeContableCrew({ id: lote.officeId, ...doc });
-          const guardado = guardarDocumento(db, lote.officeId, doc, resultado, { clienteId: hallado.cliente.id, rol: hallado.rol });
-          if (guardado === null) {
-            // Error de procesamiento (p. ej. sin crédito de la API): no se registra; 2 seguidos frenan el lote.
-            item.estado = 'error';
-            item.detalle = String(resultado?.error ?? resultado?.status ?? 'Error de procesamiento').slice(0, 300);
-            if (++seguidos >= 2) detenido = true;
+          let fallo = false;
+          if (a.pdf || a.textoPdf) {
+            fallo = await tratarPdf(lote, item, a, ctx);
           } else {
-            seguidos = 0;
-            item.estado = String(resultado.status);
-            const m = resultado.motivos_revision ?? resultado.detalles?.motivos;
-            if (Array.isArray(m) && m.length) item.detalle = String(m[0]).slice(0, 300);
+            // El XML se lee primero sin perfil: el perfil tributario depende del cliente, y el cliente sale del XML.
+            const c = await convertirXml(a.contenido!, false, false);
+            if (!c.ok || !c.documento) {
+              item.estado = 'no_leido';
+              item.detalle = c.error || 'No se pudo leer el XML';
+              continue;
+            }
+            fallo = await tratarDocumento(lote, item, { ...c.documento }, ctx);
           }
+          if (fallo) { if (++ctx.seguidos >= 2) ctx.detenido = true; } else ctx.seguidos = 0;
+          // Un PDF que estaba en espera ya tiene su documento real: se retira el marcador.
+          if (a.marcador && !fallo && item.estado !== 'en_espera' && item.documento_id && item.documento_id !== a.marcador) borrarMarcador(db, lote.officeId, a.marcador);
         } catch (e) {
           item.estado = 'error';
           item.detalle = (e instanceof Error ? e.message : String(e)).slice(0, 300);
-          if (++seguidos >= 2) detenido = true;
+          if (++ctx.seguidos >= 2) ctx.detenido = true;
         }
       }
     } finally {
@@ -262,8 +342,21 @@ export function crearCrewsRouter(db: Database.Database) {
       return res.status(400).json({ status: 'error', error: 'Envía "archivos": [{ nombre, contenido }]' });
     }
     if (archivos.length > 50) return res.status(400).json({ status: 'error', error: 'Máximo 50 archivos por lote' });
-    if (!archivos.every((a: any) => a && typeof a.nombre === 'string' && typeof a.contenido === 'string')) {
-      return res.status(400).json({ status: 'error', error: 'Cada archivo necesita nombre y contenido (texto del XML)' });
+    const lista: ArchivoLote[] = [];
+    for (const a of archivos as any[]) {
+      if (!a || typeof a.nombre !== 'string') return res.status(400).json({ status: 'error', error: 'Cada archivo necesita un nombre' });
+      if (typeof a.base64 === 'string') {
+        const buf = Buffer.from(a.base64, 'base64');
+        if (buf.length === 0 || buf.slice(0, 5).toString('latin1') !== '%PDF-') {
+          return res.status(400).json({ status: 'error', error: `"${a.nombre.slice(0, 80)}" no es un PDF válido` });
+        }
+        if (buf.length > MAX_PDF_BYTES) return res.status(400).json({ status: 'error', error: `"${a.nombre.slice(0, 80)}" supera 10 MB` });
+        lista.push({ nombre: a.nombre, pdf: buf });
+      } else if (typeof a.contenido === 'string') {
+        lista.push({ nombre: a.nombre, contenido: a.contenido });
+      } else {
+        return res.status(400).json({ status: 'error', error: 'Cada archivo necesita "contenido" (texto del XML) o "base64" (PDF)' });
+      }
     }
     for (const l of lotes.values()) {
       if (l.officeId === id && !l.terminado) {
@@ -275,8 +368,31 @@ export function crearCrewsRouter(db: Database.Database) {
     const loteId = randomUUID();
     const lote: Lote = { officeId: id, total: archivos.length, items: [], terminado: false, creado: Date.now() };
     lotes.set(loteId, lote);
-    void procesarLote(lote, archivos, req.body?.reprocesar === true);
+    void procesarLote(lote, lista, req.body?.reprocesar === true);
     res.status(202).json({ status: 'ok', loteId, total: lote.total, inicio: inicioIso(lote) });
+  });
+
+  router.get('/oficinas/:officeId/tope', (req, res) => {
+    const id = idValido(req.params.officeId);
+    if (!id) return res.status(400).json({ status: 'error', error: 'officeId inválido' });
+    res.json({ status: 'ok', officeId: id, ...estadoTope(db, id), en_espera: pdfsEnEspera(db, id).length });
+  });
+
+  // Lee los PDF que quedaron en espera por tope, hasta donde alcance el cupo (útil al cambiar de mes o subir el tope).
+  router.post('/oficinas/:officeId/en-espera/procesar', (req, res) => {
+    const id = idValido(req.params.officeId);
+    if (!id) return res.status(400).json({ status: 'error', error: 'officeId inválido' });
+    for (const l of lotes.values()) {
+      if (l.officeId === id && !l.terminado) return res.status(409).json({ status: 'error', error: 'Esta oficina ya tiene un lote en proceso; espera a que termine' });
+    }
+    const esperando = pdfsEnEspera(db, id);
+    if (!esperando.length) return res.json({ status: 'ok', total: 0, mensaje: 'No hay PDF en espera' });
+    if (!hayCupo(db, id)) return res.status(409).json({ status: 'error', error: 'Aún no hay cupo en el tope de este mes', ...estadoTope(db, id) });
+    const loteId = randomUUID();
+    const lote: Lote = { officeId: id, total: esperando.length, items: [], terminado: false, creado: Date.now() };
+    lotes.set(loteId, lote);
+    void procesarLote(lote, esperando.map((e) => ({ nombre: e.nombre_archivo, textoPdf: e.texto_pdf, huella: e.huella, marcador: e.documento_id })), false);
+    res.status(202).json({ status: 'ok', loteId, total: lote.total });
   });
 
   router.get('/contable/lote/:loteId', (req, res) => {

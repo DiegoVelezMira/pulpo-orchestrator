@@ -309,4 +309,16 @@ export function configurarAcceso(app: Express, db: Database.Database) {
     db.prepare("DELETE FROM acceso_intentos WHERE scope LIKE ?").run(`o:${id}:%`);
     res.json({ status: "ok", id, clave }); // la clave solo se muestra aquí
   });
+
+  // Tope mensual de PDF leídos con IA por oficina (null o 0 = sin tope). Solo el administrador lo cambia.
+  app.put("/api/admin/oficinas/:id/tope", (req, res) => {
+    const id = Number(req.params.id);
+    if (!db.prepare("SELECT id FROM offices WHERE id = ?").get(id)) return res.status(404).json({ status: "error", error: "Oficina no encontrada" });
+    const v = req.body?.tope;
+    if (v !== null && !(Number.isInteger(v) && v >= 0 && v <= 100000)) {
+      return res.status(400).json({ status: "error", error: "El tope debe ser un número entero de PDF por mes (o null para quitarlo)." });
+    }
+    db.prepare("UPDATE offices SET tope_pdf_mes = ? WHERE id = ?").run(v === 0 ? null : v, id);
+    res.json({ status: "ok", id, tope: v === 0 ? null : v });
+  });
 }

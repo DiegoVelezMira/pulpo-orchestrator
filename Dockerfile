@@ -11,6 +11,8 @@ RUN npm prune --omit=dev
 
 # Runtime stage
 FROM node:22-alpine
+# poppler-utils trae pdftotext, que saca el texto de los PDF en el servidor
+RUN apk add --no-cache poppler-utils
 WORKDIR /app
 COPY package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
