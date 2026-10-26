@@ -1,0 +1,51 @@
+/* Estilo común de las pantallas de Pulpo (colores y tipografía del sistema de diseño). */
+:root {
+  --page:#f4f6fa; --card:#fff; --subtle:#eef1f6; --ink:#1b2333; --muted:#4b5565; --border:#d9dee7; --strong:#8a94a6;
+  --accent:#2b4acb; --accent-hover:#1f38a3; --accent-soft:#e6ebfd; --on-accent:#fff; --bad:#b42318;
+  --s-recibido-bg:#e9ecf1; --s-recibido-fg:#3d4756; --s-leido-bg:#e1f0ff; --s-leido-fg:#0b4f8a;
+  --s-ayuda-bg:#fff1d6; --s-ayuda-fg:#8a4b00; --s-espera-bg:#dcf3f1; --s-espera-fg:#0b5b55;
+  --s-revisado-bg:#ddf5e7; --s-revisado-fg:#0b6b3a; --s-exportado-bg:#ece5fb; --s-exportado-fg:#4a2a9b;
+  --font:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --page:#12161f; --card:#1a2030; --subtle:#222a3c; --ink:#e8ecf4; --muted:#a2adc2; --border:#2d3650; --strong:#6b7894;
+  --accent:#8aa2ff; --accent-hover:#a5b8ff; --accent-soft:#232d52; --on-accent:#10162b; --bad:#ff8a7e;
+  --s-recibido-bg:#262d3d; --s-recibido-fg:#c4cbd9; --s-leido-bg:#16324d; --s-leido-fg:#8cc7ff;
+  --s-ayuda-bg:#43330f; --s-ayuda-fg:#ffcd7a; --s-espera-bg:#12403d; --s-espera-fg:#82e0d8;
+  --s-revisado-bg:#12402a; --s-revisado-fg:#7fe0a8; --s-exportado-bg:#33285a; --s-exportado-fg:#c3adff;
+} }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--page); color:var(--ink); font:15px/1.45 var(--font); }
+.top { background:var(--card); border-bottom:1px solid var(--border); }
+.top .in { max-width:1120px; margin:0 auto; padding:10px 16px; display:flex; flex-wrap:wrap; gap:8px 20px; align-items:center; justify-content:space-between; }
+.top nav { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+.top a.n { color:var(--ink); text-decoration:none; padding:6px 10px; border-radius:8px; font-weight:500; }
+.top a.n[aria-current="page"] { background:var(--accent-soft); color:var(--accent); }
+.marca { font-weight:700; letter-spacing:-.01em; margin-right:8px; }
+.quien { color:var(--muted); font-size:13.5px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+main { max-width:1120px; margin:0 auto; padding:20px 16px 56px; display:grid; gap:16px; }
+h1 { font-size:22px; line-height:1.2; margin:0; }
+h2 { font-size:16px; margin:0 0 8px; }
+.muted { color:var(--muted); } .mono { font-family:var(--mono); font-size:13px; } .err { color:var(--bad); }
+.card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px; box-shadow:0 1px 2px rgba(27,35,51,.05); }
+button, input, select, textarea { font:inherit; color:inherit; }
+input, select, textarea { background:var(--page); border:1px solid var(--border); border-radius:8px; padding:7px 10px; max-width:100%; }
+textarea { width:100%; min-height:70px; }
+button { border:1px solid var(--strong); background:var(--card); border-radius:8px; padding:7px 12px; cursor:pointer; }
+button.p { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+button.p:hover { background:var(--accent-hover); }
+button:disabled { opacity:.5; cursor:default; }
+a { color:var(--accent); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.pill { display:inline-block; font-size:12.5px; font-weight:600; padding:2px 10px; border-radius:999px; white-space:nowrap; }
+.s-recibido { background:var(--s-recibido-bg); color:var(--s-recibido-fg); } .s-leido { background:var(--s-leido-bg); color:var(--s-leido-fg); }
+.s-necesita_ayuda { background:var(--s-ayuda-bg); color:var(--s-ayuda-fg); } .s-en_espera { background:var(--s-espera-bg); color:var(--s-espera-fg); }
+.s-revisado { background:var(--s-revisado-bg); color:var(--s-revisado-fg); } .s-exportado { background:var(--s-exportado-bg); color:var(--s-exportado-fg); }
+.wrapx { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+th { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; }
+td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+.vacio { text-align:center; color:var(--muted); padding:28px 8px; }
+.aviso { border-radius:10px; padding:10px 14px; background:var(--s-ayuda-bg); color:var(--s-ayuda-fg); }
+.ok { border-radius:10px; padding:10px 14px; background:var(--s-revisado-bg); color:var(--s-revisado-fg); }

@@ -50,7 +50,7 @@ console.log(`✓ Database ready at ${DB_PATH}`);
 
 // Middleware
 
-app.use(express.json({ limit: "25mb" })); // la carga por lote envía el texto de varios XML
+app.use(express.json({ limit: "40mb" })); // la carga por lote envía el texto de varios XML
 
 // Acceso por oficina: clave compartida + nombre, sesión firmada y administrador aparte (src/auth/acceso.ts).
 configurarAcceso(app, db);

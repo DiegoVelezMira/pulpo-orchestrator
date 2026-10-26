@@ -3,128 +3,114 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cargar documentos</title>
+<title>Cargar · Pulpo</title>
+<link rel="stylesheet" href="/pulpo.css">
 <style>
-  :root { --fg:#1d2433; --mut:#64708a; --bg:#f6f7fb; --card:#fff; --line:#e2e6f0; --ok:#1f7a4d; --warn:#b45309; --bad:#b42318; --acc:#2347c5; }
-  @media (prefers-color-scheme: dark) { :root { --fg:#e8ebf5; --mut:#9aa6c2; --bg:#12151d; --card:#1b2030; --line:#2b3248; --ok:#54c18a; --warn:#f0a548; --bad:#f2786d; --acc:#7d9bff; } }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
-  main { max-width:960px; margin:0 auto; padding:16px; }
-  h1 { font-size:20px; margin:8px 0 12px; }
-  .barra { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
-  input, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
-  input[type=checkbox] { padding:0; }
-  button { cursor:pointer; } button.p { background:var(--acc); border-color:var(--acc); color:#fff; } button:disabled { opacity:.5; cursor:default; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
-  .mut { color:var(--mut); font-size:13px; } .err { color:var(--bad); } .warn { color:var(--warn); }
-  table { width:100%; border-collapse:collapse; font-size:14px; } td, th { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; word-break:break-word; }
-  .tag { display:inline-block; font-size:12px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); }
-  .tag.procesado { color:var(--ok); border-color:var(--ok); }
-  .tag.requiere_revision, .tag.duplicado, .tag.no_leido, .tag.sin_procesar { color:var(--warn); border-color:var(--warn); }
-  .tag.rechazado, .tag.error { color:var(--bad); border-color:var(--bad); }
-  a, .lnk { color:var(--acc); cursor:pointer; text-decoration:underline; }
+  .zona { border:2px dashed var(--strong); border-radius:12px; padding:28px 16px; text-align:center; background:var(--card); }
+  .zona.sobre { border-color:var(--accent); background:var(--accent-soft); }
+  .fila { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .res { font-size:13px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Cargar documentos</h1>
-  <div class="card">
-    <div class="barra">
-      <label>Oficina (número) <input id="oficina" size="6" inputmode="numeric"></label>
-      <input id="archivos" type="file" accept=".xml,text/xml,application/xml" multiple>
-      <button class="p" id="enviar">Procesar</button>
-    </div>
-    <label class="mut"><input type="checkbox" id="reprocesar"> Reprocesar lo ya cargado que aún no tiene revisión (lo aprobado o corregido nunca se toca)</label>
-    <div class="mut" style="margin-top:6px">Facturas electrónicas en XML, hasta 50 por lote y 20 MB en total. Lo ya registrado se omite.</div>
-    <div id="msg" class="mut" style="margin-top:6px"></div>
+  <div class="zona" id="zona">
+    <p><b>Arrastra aquí las facturas</b> en XML o PDF, o <button type="button" id="elegir">elige los archivos</button></p>
+    <p class="muted">Hasta 50 por lote y 20 MB en total. Lo que ya estaba registrado se omite sin gastar lectura con IA.</p>
+    <input id="archivos" type="file" accept=".xml,.pdf,text/xml,application/xml,application/pdf" multiple hidden>
   </div>
-  <div id="resumen" class="card" hidden></div>
-  <div class="card" id="tabla" hidden>
-    <table><thead><tr><th>Archivo</th><th>Estado</th><th>Detalle</th></tr></thead><tbody id="filas"></tbody></table>
+  <div class="card fila" id="elegidos" hidden>
+    <span id="cuantos" class="muted"></span>
+    <label class="fila"><input type="checkbox" id="reprocesar"> Reprocesar lo cargado que aún no tiene revisión</label>
+    <button class="p" id="enviar">Procesar</button>
+  </div>
+  <div id="msg" hidden></div>
+  <div class="card wrapx" id="tabla" hidden>
+    <div id="resumen" style="margin-bottom:8px"></div>
+    <table><thead><tr><th>Archivo</th><th>Resultado</th><th>Detalle</th></tr></thead><tbody id="filas"></tbody></table>
+    <p style="margin-top:10px"><a href="/documentos.html" id="verDocs">Ver los documentos</a></p>
   </div>
 </main>
+<script src="/pulpo.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
-try { $('oficina').value = localStorage.getItem('oficina_num') || ''; } catch (e) {}
-let timer = null, fallos = 0, oficinaActual = '';
+(function () {
+  var P = window.Pulpo, esc = P.esc;
+  var $ = function (id) { return document.getElementById(id); };
+  var ctx, files = [], timer = null, fallos = 0;
+  var ETQ = { procesado: ['Leído', 'leido'], requiere_revision: ['Necesita ayuda', 'necesita_ayuda'], rechazado: ['Necesita ayuda', 'necesita_ayuda'],
+    sin_cliente: ['Necesita ayuda', 'necesita_ayuda'], no_leido: ['Necesita ayuda', 'necesita_ayuda'], en_espera: ['En espera por tope', 'en_espera'],
+    duplicado: ['Ya estaba cargado', 'recibido'], error: ['Error', 'necesita_ayuda'], sin_procesar: ['Sin procesar', 'necesita_ayuda'], procesando: ['Procesando…', 'recibido'] };
+  function msg(html, cls) { $('msg').className = cls || 'aviso'; $('msg').innerHTML = html; $('msg').hidden = !html; }
 
-async function enviar() {
-  const oficina = $('oficina').value.trim();
-  const files = Array.from($('archivos').files);
-  if (!/^[1-9]\d*$/.test(oficina)) { $('msg').innerHTML = '<span class="err">Escribe el número de la oficina.</span>'; return; }
-  if (!files.length) { $('msg').innerHTML = '<span class="err">Elige al menos un XML.</span>'; return; }
-  if (files.length > 50) { $('msg').innerHTML = '<span class="err">Máximo 50 archivos por lote.</span>'; return; }
-  if (files.reduce((a, f) => a + f.size, 0) > 20 * 1024 * 1024) { $('msg').innerHTML = '<span class="err">Los archivos suman más de 20 MB; divide el lote.</span>'; return; }
-  try { localStorage.setItem('oficina_num', oficina); localStorage.setItem('oficina', oficina); } catch (e) {}
-  $('enviar').disabled = true; $('msg').textContent = 'Enviando…'; $('resumen').hidden = true; $('tabla').hidden = true;
-  try {
-    const archivos = await Promise.all(files.map(async (f) => ({ nombre: f.name, contenido: await f.text() })));
-    const r = await fetch('/api/crews/contable/lote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ officeId: Number(oficina), archivos, reprocesar: $('reprocesar').checked }) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || ('Error ' + r.status));
-    $('msg').textContent = 'Procesando… puede tardar un rato; no cierres esta página.';
-    oficinaActual = oficina; sondear(j.loteId);
-  } catch (e) { $('msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; $('enviar').disabled = false; }
-}
+  function elegir(lista) {
+    files = Array.prototype.filter.call(lista, function (f) { return /\.(xml|pdf)$/i.test(f.name); });
+    var omitidos = lista.length - files.length;
+    $('elegidos').hidden = !files.length;
+    $('cuantos').textContent = files.length + ' archivo(s) listo(s)' + (omitidos ? ' · ' + omitidos + ' omitido(s) por no ser XML ni PDF' : '');
+    msg('');
+  }
+  function leerArchivo(f) {
+    return new Promise(function (ok, mal) {
+      var r = new FileReader();
+      r.onerror = function () { mal(new Error('No se pudo leer ' + f.name)); };
+      if (/\.pdf$/i.test(f.name)) { r.onload = function () { ok({ nombre: f.name, base64: String(r.result).split(',')[1] || '' }); }; r.readAsDataURL(f); }
+      else { r.onload = function () { ok({ nombre: f.name, contenido: String(r.result) }); }; r.readAsText(f); }
+    });
+  }
 
-function sondear(loteId) {
-  clearInterval(timer); fallos = 0;
-  const paso = async () => {
-    try {
-      const r = await fetch('/api/crews/contable/lote/' + encodeURIComponent(loteId));
-      const j = await r.json().catch(() => ({}));
-      if (r.status === 404) { clearInterval(timer); $('enviar').disabled = false; $('msg').innerHTML = '<span class="err">Se perdió el seguimiento del lote (¿se reinició el servidor?). Vuelve a subir los mismos archivos: lo ya procesado se omite.</span>'; return; }
-      if (!r.ok) throw new Error(j.error || ('Error ' + r.status));
-      fallos = 0; pintar(j);
-      if (j.terminado) { clearInterval(timer); $('enviar').disabled = false; await cierre(j); }
-    } catch (e) {
-      if (++fallos >= 3) { clearInterval(timer); $('enviar').disabled = false; $('msg').innerHTML = '<span class="err">Se perdió la conexión: ' + esc(e.message) + '. El lote puede seguir en el servidor; recarga y revisa en "Ir a revisión".</span>'; }
+  function enviar() {
+    if (!files.length) return;
+    if (files.length > 50) return msg('Máximo 50 archivos por lote.');
+    if (files.reduce(function (a, f) { return a + f.size; }, 0) > 20 * 1024 * 1024) return msg('Los archivos suman más de 20 MB; divide el lote.');
+    $('enviar').disabled = true; msg('Enviando…', 'ok'); $('tabla').hidden = true;
+    Promise.all(files.map(leerArchivo)).then(function (archivos) {
+      return P.api('/api/crews/contable/lote', { method: 'POST', body: { officeId: ctx.oficinaId, archivos: archivos, reprocesar: $('reprocesar').checked } });
+    }).then(function (j) { msg('Procesando… puede tardar un rato; no cierres esta página.', 'ok'); sondear(j.loteId); })
+      .catch(function (e) { msg(esc(e.message)); $('enviar').disabled = false; });
+  }
+
+  function sondear(loteId) {
+    clearInterval(timer); fallos = 0;
+    function paso() {
+      P.api('/api/crews/contable/lote/' + encodeURIComponent(loteId)).then(function (j) {
+        fallos = 0; pintar(j);
+        if (j.terminado) {
+          clearInterval(timer); $('enviar').disabled = false; files = []; $('elegidos').hidden = true;
+          var malos = j.items.filter(function (i) { return i.estado === 'error' || i.estado === 'sin_procesar'; }).length;
+          msg(malos ? malos + ' archivo(s) sin procesar: vuelve a subirlos (lo ya procesado se omite).' : 'Lote terminado.', malos ? 'aviso' : 'ok');
+        }
+      }).catch(function (e) {
+        if (e.status === 404) { clearInterval(timer); $('enviar').disabled = false; msg('Se perdió el seguimiento del lote (¿se reinició el servidor?). Vuelve a subir los mismos archivos: lo ya procesado se omite.'); return; }
+        if (++fallos >= 3) { clearInterval(timer); $('enviar').disabled = false; msg('Se perdió la conexión: ' + esc(e.message) + '. El lote puede seguir en el servidor; revisa en Documentos.'); }
+      });
     }
-  };
-  paso(); timer = setInterval(paso, 3000);
-}
+    paso(); timer = setInterval(paso, 3000);
+  }
 
-function pintar(j) {
-  const cuenta = {}; j.items.forEach((i) => { cuenta[i.estado] = (cuenta[i.estado] || 0) + 1; });
-  const partes = Object.entries(cuenta).map(([k, v]) => `${v} ${k.replace('_', ' ')}`).join(' · ');
-  $('resumen').hidden = false;
-  $('resumen').innerHTML = `<b>${j.items.length} de ${j.total}</b> · ${esc(partes || '—')}<div id="cierre"></div>`;
-  $('tabla').hidden = false;
-  $('filas').innerHTML = j.items.map((i) => `<tr><td>${esc(i.nombre)}</td><td><span class="tag ${esc(i.estado)}">${esc(i.estado.replace('_', ' '))}</span></td><td class="mut">${esc(i.detalle || '')}</td></tr>`).join('');
-}
+  function pintar(j) {
+    $('tabla').hidden = false;
+    var cuenta = {};
+    j.items.forEach(function (i) { var k = (ETQ[i.estado] || [i.estado])[0]; cuenta[k] = (cuenta[k] || 0) + 1; });
+    $('resumen').innerHTML = '<b>' + j.items.length + ' de ' + j.total + '</b> · ' + esc(Object.keys(cuenta).map(function (k) { return cuenta[k] + ' ' + k.toLowerCase(); }).join(' · ') || '—');
+    $('filas').innerHTML = j.items.map(function (i) {
+      var e = ETQ[i.estado] || [i.estado, 'recibido'];
+      return '<tr><td>' + esc(i.nombre) + '</td><td>' + P.pill(e[1]).replace('>' + esc(P.ESTADOS[e[1]]) + '<', '>' + esc(e[0]) + '<') + '</td><td class="muted res">' + esc(i.detalle || '') + '</td></tr>';
+    }).join('');
+  }
 
-async function total(rev) {
-  try { const j = await (await fetch(`/api/crews/oficinas/${encodeURIComponent(oficinaActual)}/documentos?revision=${rev}`)).json(); return j.total || 0; } catch (e) { return '?'; }
-}
-
-async function cierre(j) {
-  const malos = j.items.filter((i) => i.estado === 'error' || i.estado === 'sin_procesar').length;
-  $('msg').innerHTML = malos ? `<span class="warn">Lote terminado con ${malos} archivo(s) sin procesar: revisa el detalle y vuelve a subirlos (lo ya procesado se omite).</span>` : 'Lote terminado.';
-  const [pend, corr] = await Promise.all([total('pendiente'), total('corregido')]);
-  const o = encodeURIComponent(oficinaActual), ids = encodeURIComponent(j.items.map((i) => i.documento_id).filter(Boolean).join(','));
-  $('cierre').innerHTML = `<div style="margin-top:8px"><a href="/revision.html">Ir a revisión</a> · ` +
-    `<span class="lnk" data-u="/api/crews/oficinas/${o}/documentos/export.csv?ids=${ids}">Descargar asientos de este lote (CSV)</span> · ` +
-    `<span class="lnk" data-u="/api/crews/oficinas/${o}/documentos/export.csv">Descargar todos los asientos listos (CSV)</span></div>` +
-    `<div class="mut" style="margin-top:6px">Fuera del CSV: ${pend} pendiente(s) de revisión y ${corr} corregido(s) (el asiento corregido a mano no se guarda: cárgalo manualmente). ` +
-    `Para evitar contabilizar dos veces, importa a Siigo solo el CSV del lote nuevo.</div><div id="aviso" class="mut" style="margin-top:6px"></div>`;
-  document.querySelectorAll('.lnk').forEach((el) => { el.onclick = () => descargar(el.dataset.u); });
-}
-
-async function descargar(url) {
-  const av = $('aviso'); av.textContent = 'Preparando archivo…';
-  try {
-    const r = await fetch(url); if (!r.ok) throw new Error('Error ' + r.status);
-    const exc = r.headers.get('X-Documentos-Excluidos') || '0', ids = r.headers.get('X-Documentos-Excluidos-Ids') || '';
-    const blob = await r.blob();
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = ((r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'asientos.csv';
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    av.innerHTML = 'Archivo descargado.' + (exc !== '0' ? ` <span class="warn">${esc(exc)} documento(s) quedaron fuera por asiento ausente o descuadrado: ${esc(ids)}.</span>` : '');
-  } catch (e) { av.innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
-}
-
-$('enviar').onclick = enviar;
+  P.iniciar('cargar.html').then(function (c) {
+    ctx = c;
+    if (c.admin) $('verDocs').href = '/documentos.html?oficina=' + c.oficinaId;
+    $('elegir').onclick = function () { $('archivos').click(); };
+    $('archivos').onchange = function () { elegir($('archivos').files); };
+    var z = $('zona');
+    ['dragenter', 'dragover'].forEach(function (n) { z.addEventListener(n, function (e) { e.preventDefault(); z.classList.add('sobre'); }); });
+    ['dragleave', 'drop'].forEach(function (n) { z.addEventListener(n, function (e) { e.preventDefault(); z.classList.remove('sobre'); }); });
+    z.addEventListener('drop', function (e) { elegir(e.dataTransfer.files); });
+    $('enviar').onclick = enviar;
+  });
+})();
 </script>
 </body>
 </html>

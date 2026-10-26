@@ -87,7 +87,7 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(-
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { return r.json().then(function (j) { return { r: r, j: j }; }); })
       .then(function (x) {
-        if (x.r.ok) { location.href = admin ? '/' : '/cargar.html'; return; }
+        if (x.r.ok) { location.href = admin ? '/' : '/documentos.html'; return; }
         mostrarError(x.j.error || 'No se pudo entrar.');
         $('boton').disabled = x.r.status === 429;
         $('clave').value = '';

@@ -199,7 +199,7 @@ export function guardarDocumentoSinCliente(db: Database.Database, officeId: stri
 const COLUMNAS_LISTA = `d.id, d.office_id, d.documento_id, d.tipo_documento, d.fecha_documento, d.proveedor,
   d.nit_proveedor, d.estado, d.base_gravable, d.iva, d.total_factura, d.retefuente, d.reteiva, d.neto_a_pagar,
   d.version_reglas, d.revision_humana, d.revision_nota, d.revisado_por, d.revisado_at, d.procesado_at,
-  d.cliente_id, d.rol_cliente, d.exportado_at, d.en_espera, c.nombre AS cliente_nombre`;
+  d.cliente_id, d.rol_cliente, d.exportado_at, d.en_espera, d.origen, d.nombre_archivo, c.nombre AS cliente_nombre`;
 
 export function listarDocumentos(
   db: Database.Database,
@@ -228,7 +228,7 @@ export function obtenerDocumento(db: Database.Database, officeId: string, docume
     .get(officeId, documentoId) as Record<string, any> | undefined;
   if (!f) return null;
   const j = (s: any) => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
-  const { asiento_json, motivos_json, documento_json, resultado_json, ...resto } = f;
+  const { asiento_json, motivos_json, documento_json, resultado_json, texto_pdf, ...resto } = f; // texto_pdf (texto de la factura) no sale por la API
   return { ...resto, estado_pulpo: estadoPulpo(f as any), asiento: j(asiento_json), motivos: j(motivos_json) ?? [],
            documento: j(documento_json), resultado: j(resultado_json) };
 }

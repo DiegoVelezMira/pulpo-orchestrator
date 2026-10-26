@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentos · Pulpo</title>
+<link rel="stylesheet" href="/pulpo.css">
+<style>
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { border:1px solid var(--border); background:var(--card); border-radius:999px; padding:6px 12px; display:flex; gap:8px; align-items:center; }
+  .chip[aria-pressed="true"] { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .chip b { font-variant-numeric:tabular-nums; }
+  .filtros { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .tope { display:grid; gap:6px; }
+  .barra { height:8px; border-radius:99px; background:var(--subtle); overflow:hidden; }
+  .barra .llena { display:block; height:100%; background:var(--accent); }
+  .barra.alto .llena { background:#c47a00; } .barra.agotado .llena { background:var(--bad); }
+  tr.fila { cursor:pointer; } tr.fila:hover td { background:var(--subtle); }
+  .acciones { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  td.chk { width:34px; }
+</style>
+</head>
+<body>
+<main>
+  <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:end"><h1>Documentos</h1><a href="/cargar.html" id="irCargar">Cargar documentos</a></div>
+  <div id="tope" class="card tope" hidden></div>
+  <div class="chips" id="chips" role="group" aria-label="Filtrar por estado"></div>
+  <div class="filtros">
+    <label>Cliente <select id="cliente"><option value="">Todos</option></select></label>
+    <label>Buscar <input id="buscar" type="search" placeholder="Proveedor o número" autocomplete="off"></label>
+  </div>
+  <div class="card acciones" id="acc">
+    <button class="p" id="csv" disabled>Descargar CSV</button>
+    <span class="muted" id="accTxt">Marca los documentos de los clientes que quieras exportar. Se genera un CSV por cada cliente seleccionado, con sus documentos listos (revisados, o leídos sin pendientes), y quedan en Exportado.</span>
+  </div>
+  <div id="msg" hidden></div>
+  <div class="card wrapx" style="padding:0">
+    <table>
+      <thead><tr><th class="chk"></th><th>Estado</th><th>Cliente</th><th>Proveedor</th><th>Fecha</th><th class="n">Total</th></tr></thead>
+      <tbody id="filas"><tr><td colspan="6" class="vacio">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<script src="/pulpo.js"></script>
+<script>
+(function () {
+  var P = window.Pulpo, esc = P.esc;
+  var $ = function (id) { return document.getElementById(id); };
+  var ctx, docs = [], clientes = [], estadoSel = '', sel = new Set();
+  var sufijo = '';
+
+  function msg(html, cls) { $('msg').className = cls || 'aviso'; $('msg').innerHTML = html; $('msg').hidden = !html; }
+
+  function base() { return '/api/crews/oficinas/' + ctx.oficinaId; }
+
+  function cargarTope() {
+    return P.api(base() + '/tope').then(function (t) {
+      var c = $('tope');
+      if (t.tope === null && !t.en_espera) { c.hidden = true; return; }
+      c.hidden = false;
+      var pct = t.tope ? Math.min(100, Math.round(100 * t.usados / t.tope)) : 0;
+      var txt = t.tope === null ? t.usados + ' PDF leídos con IA este mes (sin tope fijado).' :
+        '<b>' + t.usados + ' de ' + t.tope + '</b> PDF leídos con IA este mes · quedan ' + t.restantes + '.';
+      var extra = '';
+      if (t.nivel === 'agotado') extra = ' <span class="err">Se agotó el tope: los PDF nuevos quedan en espera.</span>';
+      else if (t.nivel === 'alto') extra = ' Queda poco cupo.';
+      var btn = t.en_espera && (t.restantes === null || t.restantes > 0) ? ' <button type="button" id="liberar">Leer los ' + t.en_espera + ' que esperan</button>' : (t.en_espera ? ' <span class="muted">' + t.en_espera + ' en espera.</span>' : '');
+      c.innerHTML = '<div>' + txt + extra + btn + '</div>' + (t.tope !== null ? '<div class="barra ' + esc(t.nivel) + '"><span class="llena" data-pct="' + pct + '"></span></div>' : '');
+      var ll = c.querySelector('.llena'); if (ll) ll.style.width = ll.getAttribute('data-pct') + '%';
+      var b = $('liberar');
+      if (b) b.onclick = function () {
+        b.disabled = true;
+        P.api(base() + '/en-espera/procesar', { method: 'POST' }).then(function () {
+          msg('Leyendo los PDF en espera… actualiza la lista en unos segundos.', 'ok');
+          setTimeout(function () { cargar(); }, 6000);
+        }).catch(function (e) { msg(esc(e.message)); b.disabled = false; });
+      };
+    }).catch(function () { $('tope').hidden = true; });
+  }
+
+  function chips() {
+    var cuenta = { todos: docs.length };
+    Object.keys(P.ESTADOS).forEach(function (k) { cuenta[k] = 0; });
+    docs.forEach(function (d) { cuenta[d.estado_pulpo]++; });
+    var h = '<button type="button" class="chip" data-e="" aria-pressed="' + (estadoSel === '') + '">Todos <b>' + cuenta.todos + '</b></button>';
+    Object.keys(P.ESTADOS).forEach(function (k) {
+      h += '<button type="button" class="chip" data-e="' + k + '" aria-pressed="' + (estadoSel === k) + '">' + P.pill(k) + ' <b>' + cuenta[k] + '</b></button>';
+    });
+    $('chips').innerHTML = h;
+    Array.prototype.forEach.call($('chips').querySelectorAll('.chip'), function (b) {
+      b.onclick = function () { estadoSel = b.getAttribute('data-e'); pintar(); };
+    });
+  }
+
+  function visibles() {
+    var cl = $('cliente').value, q = $('buscar').value.trim().toLowerCase();
+    return docs.filter(function (d) {
+      if (estadoSel && d.estado_pulpo !== estadoSel) return false;
+      if (cl && String(d.cliente_id) !== cl) return false;
+      if (q && (String(d.proveedor || '') + ' ' + d.documento_id).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function pintar() {
+    chips();
+    var v = visibles();
+    var tb = $('filas');
+    if (!v.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="vacio">' + (docs.length ? 'No hay documentos con ese filtro.' : 'Todavía no hay documentos. <a href="/cargar.html">Carga los primeros</a>.') + '</td></tr>';
+    } else {
+      tb.innerHTML = v.map(function (d) {
+        var id = esc(d.documento_id);
+        var cliente = d.cliente_nombre ? esc(d.cliente_nombre) : '<span class="muted">Sin cliente</span>';
+        return '<tr class="fila" data-id="' + id + '"><td class="chk"><input type="checkbox" data-id="' + id + '" aria-label="Seleccionar ' + id + '"' + (sel.has(d.documento_id) ? ' checked' : '') + '></td>' +
+          '<td>' + P.pill(d.estado_pulpo) + '</td><td>' + cliente + '</td>' +
+          '<td>' + esc(d.proveedor || d.nombre_archivo || '—') + '<div class="mono muted">' + id + '</div></td>' +
+          '<td class="mono">' + esc(d.fecha_documento || '') + '</td><td class="n">' + P.pesos(d.total_factura) + '</td></tr>';
+      }).join('');
+      Array.prototype.forEach.call(tb.querySelectorAll('tr.fila'), function (tr) {
+        tr.onclick = function (e) {
+          if (e.target.tagName === 'INPUT') return;
+          location.href = '/documento.html?id=' + encodeURIComponent(tr.getAttribute('data-id')) + sufijo.replace('?', '&');
+        };
+      });
+      Array.prototype.forEach.call(tb.querySelectorAll('input[type=checkbox]'), function (c) {
+        c.onchange = function () { var id = c.getAttribute('data-id'); if (c.checked) sel.add(id); else sel.delete(id); botonCsv(); };
+      });
+    }
+    botonCsv();
+  }
+
+  function clientesSel() {
+    var ids = new Set();
+    docs.forEach(function (d) { if (sel.has(d.documento_id) && d.cliente_id) ids.add(d.cliente_id); });
+    return Array.from(ids);
+  }
+  function botonCsv() {
+    var n = clientesSel().length;
+    $('csv').disabled = n === 0;
+    $('csv').textContent = n ? 'Descargar ' + n + ' CSV' : 'Descargar CSV';
+  }
+
+  function descargar(clienteId) {
+    return fetch(base() + '/documentos/export.csv?cliente=' + clienteId).then(function (r) {
+      if (!r.ok) throw new Error('Error ' + r.status);
+      var exc = Number(r.headers.get('X-Documentos-Excluidos') || '0');
+      var nombre = ((r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'asientos.csv';
+      return r.blob().then(function (b) {
+        var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = nombre;
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+        return { nombre: nombre, excluidos: exc };
+      });
+    });
+  }
+
+  $('csv').onclick = function () {
+    var ids = clientesSel();
+    $('csv').disabled = true;
+    var i = 0, avisos = [];
+    (function sig() {
+      if (i >= ids.length) {
+        msg('Listo: ' + ids.length + ' CSV descargado(s).' + (avisos.length ? ' ' + avisos.join(' ') : ''), avisos.length ? 'aviso' : 'ok');
+        sel.clear(); cargar(); return;
+      }
+      descargar(ids[i++]).then(function (r) {
+        if (r.excluidos) avisos.push(r.excluidos + ' documento(s) de ' + esc(r.nombre) + ' quedaron fuera por asiento ausente o descuadrado.');
+        setTimeout(sig, 400);
+      }).catch(function (e) { msg('No se pudo descargar: ' + esc(e.message)); botonCsv(); });
+    })();
+  };
+
+  function cargar() {
+    return Promise.all([
+      P.api(base() + '/documentos'),
+      P.api(base() + '/clientes')
+    ]).then(function (r) {
+      docs = r[0].documentos;
+      clientes = r[1].clientes;
+      var actual = $('cliente').value;
+      $('cliente').innerHTML = '<option value="">Todos</option>' + clientes.map(function (c) { return '<option value="' + c.id + '">' + esc(c.nombre) + '</option>'; }).join('');
+      $('cliente').value = actual;
+      pintar();
+      return cargarTope();
+    }).catch(function (e) { $('filas').innerHTML = '<tr><td colspan="6" class="vacio err">' + esc(e.message) + '</td></tr>'; });
+  }
+
+  P.iniciar('documentos.html').then(function (c) {
+    ctx = c; sufijo = c.admin ? '?oficina=' + c.oficinaId : '';
+    $('buscar').oninput = pintar; $('cliente').onchange = pintar;
+    var q = new URLSearchParams(location.search).get('estado');
+    if (q && P.ESTADOS[q]) estadoSel = q;
+    cargar();
+  });
+})();
+</script>
+</body>
+</html>

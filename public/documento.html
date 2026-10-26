@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documento · Pulpo</title>
+<link rel="stylesheet" href="/pulpo.css">
+<style>
+  .cab { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px 16px; align-items:start; }
+  .cifras { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; }
+  .cifras div { background:var(--subtle); border-radius:8px; padding:8px 10px; }
+  .cifras span { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .cifras b { font-variant-numeric:tabular-nums; }
+  ul.mot { margin:6px 0 0 18px; padding:0; }
+  .fila { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .fila label { display:grid; gap:4px; font-size:13px; color:var(--muted); }
+  .sep { display:grid; gap:10px; }
+  #doc { display:grid; gap:16px; }
+  label.chk { display:flex; gap:8px; align-items:center; color:var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <div><a href="/documentos.html" id="volver">← Documentos</a></div>
+  <div id="msg" hidden></div>
+  <div id="doc"><div class="card vacio">Cargando…</div></div>
+</main>
+<script src="/pulpo.js"></script>
+<script>
+(function () {
+  var P = window.Pulpo, esc = P.esc;
+  var $ = function (id) { return document.getElementById(id); };
+  var ctx, id = new URLSearchParams(location.search).get('id');
+  function base() { return '/api/crews/oficinas/' + ctx.oficinaId; }
+  function msg(html, cls) { $('msg').className = cls || 'aviso'; $('msg').innerHTML = html; $('msg').hidden = !html; }
+
+  function cifras(d) {
+    var items = [['Base', d.base_gravable], ['IVA', d.iva], ['Total', d.total_factura], ['ReteFuente', d.retefuente], ['ReteIVA', d.reteiva], ['Neto a pagar', d.neto_a_pagar]];
+    return '<div class="cifras">' + items.map(function (i) { return '<div><span>' + i[0] + '</span><b>' + P.pesos(i[1]) + '</b></div>'; }).join('') + '</div>';
+  }
+  function asiento(a) {
+    if (!Array.isArray(a) || !a.length) return '<p class="muted">Sin asiento propuesto.</p>';
+    return '<div class="wrapx"><table><thead><tr><th>Cuenta</th><th class="n">Débito</th><th class="n">Crédito</th></tr></thead><tbody>' +
+      a.map(function (l) { return '<tr><td>' + esc(l.cuenta) + '</td><td class="n">' + P.pesos(l.debito) + '</td><td class="n">' + P.pesos(l.credito) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  }
+
+  function pintar(d) {
+    var docu = d.documento || {};
+    var origen = d.origen === 'pdf' ? 'PDF leído con IA' + (d.nombre_archivo ? ' (' + esc(d.nombre_archivo) + ')' : '') : 'XML de la DIAN';
+    var h = '<div class="card sep"><div class="cab"><div><h1>' + esc(d.proveedor || d.nombre_archivo || d.documento_id) + '</h1><div class="mono muted">' + esc(d.documento_id) + ' · NIT ' + esc(d.nit_proveedor || '—') + ' · ' + esc(d.fecha_documento || '') + '</div></div>' +
+      '<div>' + P.pill(d.estado_pulpo) + '</div></div>' +
+      '<div class="muted">Origen: ' + origen + ' · Cliente: ' + (d.cliente_nombre ? '<b>' + esc(d.cliente_nombre) + '</b>' : 'sin asignar') + '</div></div>';
+
+    if (d.motivos && d.motivos.length) {
+      h += '<div class="aviso"><b>' + (d.estado_pulpo === 'necesita_ayuda' ? 'Por qué necesita ayuda' : 'Para tener en cuenta') + '</b><ul class="mot">' + d.motivos.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul></div>';
+    }
+    if (d.estado === 'sin_cliente') h += '<div class="card" id="elegir"></div>';
+    else h += '<div class="card"><h2>Cifras oficiales</h2>' + cifras(d) + '</div><div class="card"><h2>Asiento propuesto</h2>' + asiento(d.asiento) + '</div>';
+    if (d.revision_nota) h += '<div class="card muted">Nota de revisión: ' + esc(d.revision_nota) + (d.revisado_por ? ' — ' + esc(d.revisado_por) : '') + '</div>';
+    h += '<div class="card" id="revision"></div>';
+    $('doc').innerHTML = h;
+    if (d.estado === 'sin_cliente') elegirCliente(d, docu);
+    revision(d);
+  }
+
+  function elegirCliente(d, docu) {
+    P.api(base() + '/clientes').then(function (r) {
+      var nits = [docu.comprador && docu.comprador.nit, docu.nit_proveedor].filter(Boolean);
+      var opts = r.clientes.map(function (c) { return '<option value="' + c.id + '">' + esc(c.nombre) + ' (' + esc(c.nit) + ')</option>'; }).join('');
+      $('elegir').innerHTML = '<h2>¿A qué cliente pertenece?</h2><p class="muted">Ningún NIT del documento coincide con un cliente de la oficina (' + nits.map(esc).join(' y ') + '). Elige uno o crea uno nuevo; Pulpo recordará ese NIT.</p>' +
+        '<div class="fila">' + (opts ? '<label>Cliente existente<select id="cl">' + opts + '</select></label><button class="p" type="button" id="asignar">Asignar y leer</button>' : '<span class="muted">Aún no hay clientes.</span>') + '</div>' +
+        '<details style="margin-top:12px"><summary>Crear cliente nuevo</summary><div class="fila" style="margin-top:10px">' +
+        '<label>NIT<input id="nnit" value="' + esc((docu.comprador && docu.comprador.nit) || '') + '"></label>' +
+        '<label>Nombre<input id="nnom" value="' + esc((docu.comprador && docu.comprador.razon_social) || '') + '"></label>' +
+        '<label class="chk"><input type="checkbox" id="nret"> Agente retenedor de renta</label>' +
+        '<label class="chk"><input type="checkbox" id="ngran"> Gran contribuyente</label>' +
+        '<button class="p" type="button" id="crear">Crear y leer</button></div></details>';
+      function enviar(body, btn) {
+        btn.disabled = true; msg('Leyendo el documento con el cliente elegido…', 'ok');
+        P.api(base() + '/documentos/' + encodeURIComponent(id) + '/cliente', { method: 'POST', body: body })
+          .then(function (j) { msg('', ''); pintar(j.documento); })
+          .catch(function (e) { msg(esc(e.message)); btn.disabled = false; });
+      }
+      if ($('asignar')) $('asignar').onclick = function () { enviar({ clienteId: Number($('cl').value) }, $('asignar')); };
+      $('crear').onclick = function () { enviar({ nuevo: { nit: $('nnit').value, nombre: $('nnom').value, agente_retenedor_renta: $('nret').checked, gran_contribuyente: $('ngran').checked } }, $('crear')); };
+    });
+  }
+
+  function revision(d) {
+    var c = $('revision'), e = d.estado_pulpo;
+    if (d.estado === 'sin_cliente' || e === 'recibido' || e === 'en_espera') {
+      c.innerHTML = e === 'en_espera' ? '<span class="muted">Este PDF espera cupo del tope mensual; se leerá cuando haya.</span>' : '';
+      c.hidden = !c.innerHTML; return;
+    }
+    if (e === 'exportado') { c.innerHTML = '<span class="muted">Este documento ya se exportó; no se puede cambiar su revisión.</span>'; return; }
+    var acc = '';
+    if (e === 'revisado') {
+      acc = '<p class="muted">Revisado por ' + esc(d.revisado_por || '—') + '. Si hay un error, puedes devolverlo a Necesita ayuda.</p><textarea id="nota" placeholder="Qué pasó (opcional)"></textarea><div class="fila"><button type="button" id="devolver">Devolver a Necesita ayuda</button></div>';
+    } else {
+      var rechazado = d.estado === 'rechazado';
+      acc = '<textarea id="nota" placeholder="' + (rechazado ? 'Explica qué hiciste con este documento (obligatorio)' : 'Nota (obligatoria si lo marcas como corregido)') + '"></textarea><div class="fila">' +
+        (rechazado ? '' : '<button class="p" type="button" id="aprobar">Aprobar tal cual</button>') + '<button type="button" id="corregir">Marcar como corregido</button></div>';
+    }
+    c.innerHTML = '<h2>Revisión</h2>' + acc + '<p class="muted" style="margin-top:8px">Quedará escrito a nombre de ' + esc(ctx.nombre) + '.</p>';
+    function decidir(decision, btn) {
+      btn.disabled = true;
+      P.api(base() + '/documentos/' + encodeURIComponent(id) + '/revision', { method: 'POST', body: { decision: decision, nota: $('nota').value } })
+        .then(function (j) { msg('Listo.', 'ok'); pintar(j.documento); })
+        .catch(function (er) { msg(esc(er.message)); btn.disabled = false; });
+    }
+    ['aprobar:aprobado', 'corregir:corregido', 'devolver:devolver'].forEach(function (p) {
+      var b = $(p.split(':')[0]); if (b) b.onclick = function () { decidir(p.split(':')[1], b); };
+    });
+  }
+
+  P.iniciar('documentos.html').then(function (c) {
+    ctx = c;
+    if (c.admin) $('volver').href = '/documentos.html?oficina=' + c.oficinaId;
+    if (!id) { $('doc').innerHTML = '<div class="card vacio">Falta el documento. <a href="/documentos.html">Volver a la lista</a>.</div>'; return; }
+    P.api(base() + '/documentos/' + encodeURIComponent(id)).then(function (j) { pintar(j.documento); })
+      .catch(function (e) { $('doc').innerHTML = '<div class="card vacio err">' + esc(e.message) + '</div>'; });
+  });
+})();
+</script>
+</body>
+</html>
