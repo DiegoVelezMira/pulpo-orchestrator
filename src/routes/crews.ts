@@ -11,6 +11,7 @@ import {
   guardarDocumentoSinCliente,
   marcarOrigenPdf,
   pdfYaRegistrado,
+  unirPdfAXml,
   guardarPdfPendiente,
   pdfsEnEspera,
   borrarMarcador,
@@ -259,6 +260,14 @@ export function crearCrewsRouter(db: Database.Database) {
     }
     const cufe = cufeLocal(texto);
     const prev = pdfYaRegistrado(db, lote.officeId, huella, cufe, a.marcador);
+    if (prev && prev.origen !== 'pdf') {
+      // Es la representación gráfica de un XML que ya está cargado: se une a él y no se gasta IA.
+      unirPdfAXml(db, lote.officeId, prev.documento_id, huella);
+      item.estado = 'unido';
+      item.documento_id = prev.documento_id;
+      item.detalle = 'Unido a su XML, que ya estaba cargado';
+      return false;
+    }
     if (prev) {
       item.estado = 'duplicado';
       item.documento_id = prev.documento_id;

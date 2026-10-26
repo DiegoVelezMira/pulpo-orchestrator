@@ -40,7 +40,7 @@
   var ctx, files = [], timer = null, fallos = 0;
   var ETQ = { procesado: ['Leído', 'leido'], requiere_revision: ['Necesita ayuda', 'necesita_ayuda'], rechazado: ['Necesita ayuda', 'necesita_ayuda'],
     sin_cliente: ['Necesita ayuda', 'necesita_ayuda'], no_leido: ['Necesita ayuda', 'necesita_ayuda'], en_espera: ['En espera por tope', 'en_espera'],
-    duplicado: ['Ya estaba cargado', 'recibido'], error: ['Error', 'necesita_ayuda'], sin_procesar: ['Sin procesar', 'necesita_ayuda'], procesando: ['Procesando…', 'recibido'] };
+    duplicado: ['Ya estaba cargado', 'recibido'], unido: ['Unido a su XML', 'leido'], error: ['Error', 'necesita_ayuda'], sin_procesar: ['Sin procesar', 'necesita_ayuda'], procesando: ['Procesando…', 'recibido'] };
   function msg(html, cls) { $('msg').className = cls || 'aviso'; $('msg').innerHTML = html; $('msg').hidden = !html; }
 
   function elegir(lista) {

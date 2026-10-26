@@ -9,6 +9,7 @@ Salida (stdout, JSON): {"ok": true, "documento": {...}, "avisos": [...]}  o  {"o
 El id del documento es NUMERO_NITPROVEEDOR (NC-NUMERO_NIT para notas credito; estable: subir el mismo XML da el mismo id).
 """
 import argparse
+import html
 import json
 import os
 import re
@@ -51,6 +52,10 @@ def main():
         id_doc = f"{numero}_{nit}" if crudo.get("tipo") != "nota_credito" else f"NC-{numero}_{nit}"
         doc = a_documento(crudo, a.retenedor == "si", id_doc, anonimizar=False,
                           gran_contribuyente=(a.gran == "si"))
+        # CUFE del XML (cbc:UUID de 96 hex; tambien dentro del sobre escapado): sirve para unir el PDF con su XML.
+        m = re.search(r"<cbc:UUID[^>]*>\s*([0-9a-fA-F]{96})\s*</cbc:UUID>",
+                      html.unescape(crudo_bytes.decode("utf-8", "ignore")))
+        doc["cufe"] = m.group(1).lower() if m else None
         salir({"ok": True, "documento": doc, "avisos": adv})
     except Exception as e:  # noqa: BLE001 - cualquier XML danado se reporta, no tumba el lote
         salir({"ok": False, "error": str(e)[:300]})

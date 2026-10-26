@@ -198,3 +198,33 @@ test("niveles del tope: 60% aviso, 85% alto, 100% agotado", () => {
   assert.equal(niv(), "agotado");
   assert.equal(estadoTope(db, 1).restantes, 0);
 });
+
+test("el lector de XML entrega el CUFE (cbc:UUID) para poder unir el PDF con su XML", () => {
+  execFileSync("python3", ["crews/generar_xml_sinteticos.py", join(dir, "xml")], { stdio: "ignore" });
+  const original = readFileSync(join(dir, "xml", "SINT-001_compra_normal.xml"), "utf8");
+  const conUuid = original.replace("<cbc:ID>", `<cbc:UUID schemeName="CUFE-SHA384">${"A1".repeat(48)}</cbc:UUID><cbc:ID>`);
+  assert.notEqual(conUuid, original);
+  const ruta = join(dir, "con-uuid.xml");
+  require("node:fs").writeFileSync(ruta, conUuid);
+  const r = JSON.parse(execFileSync("python3", ["crews/xml_a_documento.py", ruta, "--retenedor", "no", "--gran", "no"]).toString());
+  assert.equal(r.ok, true);
+  assert.equal(r.documento.cufe, "a1".repeat(48));
+});
+
+test("un PDF cuyo XML ya está cargado se une a él: no gasta IA y no queda como duplicado", async () => {
+  const db = new Database(dbPath);
+  db.prepare(`INSERT INTO documentos_procesados (office_id, documento_id, tipo_documento, estado, revision_humana, procesado_at, cufe)
+              VALUES (?, 'FE-1001_900555444', 'factura_compra', 'procesado', 'no_aplica', ?, ?)`).run(String(B), new Date().toISOString(), "a1".repeat(48));
+  db.close();
+  const antes = llamadasIa;
+  for (let vez = 0; vez < 2; vez++) {
+    const r = await llamar("POST", "/api/crews/contable/lote", { officeId: B, archivos: [pdf("buena_1.pdf")] }, cB);
+    const lote = await esperarLote((await r.json()).loteId, cB);
+    assert.equal(lote.items[0].estado, "unido");
+    assert.match(lote.items[0].detalle, /Unido a su XML/);
+    assert.equal(lote.items[0].documento_id, "FE-1001_900555444");
+  }
+  assert.equal(llamadasIa, antes);
+  const lista = await (await llamar("GET", `/api/crews/oficinas/${B}/documentos`, null, cB)).json();
+  assert.equal((lista.documentos ?? lista).length, 1);
+});

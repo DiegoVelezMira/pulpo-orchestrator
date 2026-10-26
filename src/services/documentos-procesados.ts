@@ -168,6 +168,7 @@ export function guardarDocumento(
       cliente_id: cliente?.clienteId ?? null,
       rol_cliente: cliente?.rol ?? null,
     }) as { id: number };
+  anotarCufe(db, officeId ?? 'sin_id', docId, documento.cufe);
   return fila.id;
 }
 
@@ -193,6 +194,7 @@ export function guardarDocumentoSinCliente(db: Database.Database, officeId: stri
       motivos: JSON.stringify(['Elige a qué cliente pertenece este documento']),
       doc: JSON.stringify(documento), ahora: new Date().toISOString(),
     }) as { id: number };
+  anotarCufe(db, officeId, docId, documento.cufe);
   return f.id;
 }
 
@@ -244,8 +246,19 @@ export function marcarOrigenPdf(db: Database.Database, officeId: string | number
 // ¿Este PDF (mismo archivo o mismo CUFE) ya está registrado en la oficina?
 export function pdfYaRegistrado(db: Database.Database, officeId: string | number, huella: string, cufe: string | null, excluir?: string) {
   return db
-    .prepare('SELECT documento_id, estado, en_espera FROM documentos_procesados WHERE office_id = ? AND (huella = ? OR (? IS NOT NULL AND cufe = ?)) AND documento_id <> ? LIMIT 1')
-    .get(String(officeId), huella, cufe, cufe, excluir ?? '') as { documento_id: string; estado: string; en_espera: number } | undefined;
+    .prepare('SELECT documento_id, estado, en_espera, origen FROM documentos_procesados WHERE office_id = ? AND (huella = ? OR (? IS NOT NULL AND cufe = ?)) AND documento_id <> ? LIMIT 1')
+    .get(String(officeId), huella, cufe, cufe, excluir ?? '') as { documento_id: string; estado: string; en_espera: number; origen: string | null } | undefined;
+}
+
+// El PDF es el mismo documento que un XML ya cargado: se guarda su huella en la fila del XML para reconocerlo si vuelve a subirse.
+export function unirPdfAXml(db: Database.Database, officeId: string | number, documentoId: string, huella: string) {
+  db.prepare('UPDATE documentos_procesados SET huella = COALESCE(huella, ?) WHERE office_id = ? AND documento_id = ?').run(huella, String(officeId), documentoId);
+}
+
+// Guarda el CUFE que trae el documento (XML o PDF) para poder reconocer después su pareja.
+function anotarCufe(db: Database.Database, officeId: string | number, documentoId: string, cufe: unknown) {
+  if (typeof cufe !== 'string' || !cufe) return;
+  db.prepare('UPDATE documentos_procesados SET cufe = COALESCE(cufe, ?) WHERE office_id = ? AND documento_id = ?').run(cufe, String(officeId), documentoId);
 }
 
 // PDF recibido que no se pudo (o no se pudo todavía) leer: sin texto (escaneado) o esperando cupo del tope.
