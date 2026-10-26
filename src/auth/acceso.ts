@@ -1,3 +1,5 @@
+import { estadoTope } from "../services/tope";
+import { estadoPulpo, conteosPorEstado } from "../services/clientes";
 import { Express, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import Database from "better-sqlite3";
@@ -286,8 +288,14 @@ export function configurarAcceso(app: Express, db: Database.Database) {
 
   // --- Administrador: oficinas y claves ---
   app.get("/api/admin/oficinas", (_req, res) => {
-    const filas = db.prepare("SELECT id, name, created_at, clave_hash IS NOT NULL AS tiene_clave FROM offices ORDER BY id").all();
-    res.json(filas);
+    const filas = db.prepare("SELECT id, name, created_at, clave_hash IS NOT NULL AS tiene_clave FROM offices ORDER BY id").all() as any[];
+    // Además de los datos de la oficina: su tope del mes y cuántos documentos tiene en cada estado.
+    res.json(filas.map((f) => {
+      const t = estadoTope(db, f.id);
+      const docs = db.prepare("SELECT estado, revision_humana, exportado_at, en_espera, cliente_id FROM documentos_procesados WHERE office_id = ?").all(String(f.id)) as any[];
+      const documentos = conteosPorEstado(docs.map((d) => ({ estado_pulpo: estadoPulpo(d) })));
+      return { ...f, tope: t.tope, usados: t.usados, restantes: t.restantes, nivel: t.nivel, documentos };
+    }));
   });
 
   app.post("/api/admin/oficinas", (req, res) => {

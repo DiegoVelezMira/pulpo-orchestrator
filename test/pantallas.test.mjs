@@ -54,3 +54,21 @@ test("la lista y el detalle no entregan el texto crudo del PDF", async () => {
   assert.ok(!JSON.stringify(lista).includes("CONFIDENCIAL"));
   assert.ok(!JSON.stringify(det).includes("CONFIDENCIAL"));
 });
+
+test("Oficinas: la lista del administrador trae tope, uso y documentos por estado; la oficina no la ve", async () => {
+  const adm = (await post("/api/acceso/admin", { clave: ADMIN })).headers.getSetCookie()[0].split(";")[0];
+  const put = await fetch(BASE + `/api/admin/oficinas/${A}/tope`, { method: "PUT", headers: { "Content-Type": "application/json", Cookie: adm }, body: JSON.stringify({ tope: 50 }) });
+  assert.equal(put.status, 200);
+  const lista = await (await fetch(BASE + "/api/admin/oficinas", { headers: { Cookie: adm } })).json();
+  const a = lista.find((o) => o.id === A);
+  assert.equal(a.tope, 50);
+  assert.equal(a.usados, 0);
+  assert.equal(a.nivel, "normal");
+  assert.equal(a.documentos.en_espera, 1);
+  assert.equal(a.documentos.total, 1);
+  assert.equal((await fetch(BASE + "/api/admin/oficinas", { headers: { Cookie: cA } })).status, 403);
+  // La página de inicio sirve solo con sesión y es la de Oficinas.
+  assert.equal((await fetch(BASE + "/", { redirect: "manual" })).status, 302);
+  const html = await (await fetch(BASE + "/", { headers: { Cookie: adm } })).text();
+  assert.match(html, /<title>Oficinas/);
+});

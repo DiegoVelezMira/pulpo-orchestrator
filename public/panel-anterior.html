@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pulpo — Panel</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --border:#262a33; --text:#e7e9ee;
+    --muted:#8b93a3; --accent:#6b8afd; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --panel:#ffffff; --border:#e2e5ea; --text:#171a21; --muted:#5b6474; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:20px 24px;border-bottom:1px solid var(--border)}
+  header h1{margin:0;font-size:20px}
+  header p{margin:4px 0 0;color:var(--muted);font-size:13px}
+  main{max-width:960px;margin:0 auto;padding:24px;display:grid;gap:20px}
+  .grid{display:grid;grid-template-columns:280px 1fr;gap:20px}
+  @media (max-width:720px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px}
+  .card h2{margin:0 0 12px;font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  input,textarea,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);font:inherit;margin-bottom:8px}
+  textarea{min-height:80px;resize:vertical}
+  button{padding:9px 14px;border-radius:8px;border:none;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  button.secondary{background:transparent;border:1px solid var(--border);color:var(--text)}
+  ul{list-style:none;margin:0;padding:0}
+  li.office{padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--muted)}
+  li.office:hover{background:var(--border)}
+  li.office.active{background:var(--accent);color:#fff}
+  .task{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px}
+  .task .meta{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-bottom:6px}
+  .badge{padding:2px 8px;border-radius:999px;font-size:11px}
+  .badge.pending{background:rgba(251,191,36,.15);color:var(--warn)}
+  .badge.completed{background:rgba(74,222,128,.15);color:var(--ok)}
+  .badge.approval-pending{background:rgba(251,191,36,.15);color:var(--warn)}
+  .badge.approval-approved{background:rgba(74,222,128,.15);color:var(--ok)}
+  .badge.approval-rejected{background:rgba(248,113,113,.15);color:var(--bad)}
+  .badge.ticket-type{background:rgba(107,138,253,.15);color:var(--accent)}
+  .badge.urgency-5,.badge.urgency-4{background:rgba(248,113,113,.15);color:var(--bad)}
+  .badge.urgency-3{background:rgba(251,191,36,.15);color:var(--warn)}
+  .badge.urgency-2,.badge.urgency-1{background:rgba(74,222,128,.15);color:var(--ok)}
+  .badge.severity-critical{background:rgba(248,113,113,.15);color:var(--bad)}
+  .badge.severity-warning{background:rgba(251,191,36,.15);color:var(--warn)}
+  .approval-actions{display:flex;gap:8px;margin-top:8px}
+  .approval-actions button.approve{background:var(--ok);color:#0f1115}
+  .approval-actions button.reject{background:var(--bad);color:#0f1115}
+  .task pre{white-space:pre-wrap;margin:6px 0 0;font:inherit;color:var(--text)}
+  .empty{color:var(--muted);font-size:13px;padding:8px 0}
+  .row{display:flex;gap:8px}
+  .row button{flex:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pulpo</h1>
+  <p>Panel mínimo — crear oficinas, clasificar y ejecutar tareas, ver historial</p>
+</header>
+<main>
+  <div class="grid">
+    <div class="card">
+      <h2>Oficinas</h2>
+      <input id="newOfficeName" placeholder="Nombre de la oficina" />
+      <button id="createOfficeBtn" style="width:100%">Crear oficina</button>
+      <div style="height:12px"></div>
+      <ul id="officeList"><li class="empty">Cargando…</li></ul>
+    </div>
+
+    <div class="card" id="detail" style="display:none">
+      <h2 id="detailTitle">Oficina</h2>
+
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Nueva tarea (correo)</h2>
+        <textarea id="emailContent" placeholder="Pega aquí el contenido del correo o solicitud…"></textarea>
+        <button id="classifyBtn">Clasificar y crear tarea</button>
+      </div>
+
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Aprobaciones pendientes</h2>
+        <div id="approvalList"><div class="empty">Selecciona una oficina</div></div>
+      </div>
+
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Bandeja de tickets (Administrativo) — por urgencia</h2>
+        <div id="ticketList"><div class="empty">Selecciona una oficina</div></div>
+      </div>
+
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Alertas de Compliance (Legal)</h2>
+        <button id="runChecksBtn" class="secondary" style="width:100%;margin-bottom:10px">Correr chequeos</button>
+        <div id="complianceList"><div class="empty">Selecciona una oficina</div></div>
+      </div>
+
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <h2>Facturación electrónica DIAN (Siigo)</h2>
+        <div id="siigoStatus" class="empty">Selecciona una oficina</div>
+        <div id="siigoConfigForm" style="display:none;margin-top:10px">
+          <input id="siigoUsername" placeholder="Usuario Siigo" />
+          <input id="siigoAccessKey" type="password" placeholder="Access key" />
+          <input id="siigoPartnerId" placeholder="Partner-Id (opcional)" />
+          <button id="siigoSaveBtn" class="secondary" style="width:100%">Guardar credenciales</button>
+        </div>
+        <button id="siigoRunChecksBtn" class="secondary" style="width:100%;margin:10px 0;display:none">Correr chequeos DIAN</button>
+        <div id="siigoFlagsList"></div>
+      </div>
+
+      <h2>Tareas</h2>
+      <div id="taskList"><div class="empty">Selecciona una oficina</div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+let currentOffice = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function loadOffices() {
+  const offices = await api("/offices");
+  const list = document.getElementById("officeList");
+  list.innerHTML = "";
+  if (!offices.length) {
+    list.innerHTML = '<li class="empty">Sin oficinas todavía</li>';
+    return;
+  }
+  offices.forEach(o => {
+    const li = document.createElement("li");
+    li.className = "office" + (currentOffice && currentOffice.id === o.id ? " active" : "");
+    li.textContent = o.name;
+    li.onclick = () => selectOffice(o);
+    list.appendChild(li);
+  });
+}
+
+async function selectOffice(office) {
+  currentOffice = office;
+  document.getElementById("detail").style.display = "block";
+  document.getElementById("detailTitle").textContent = office.name;
+  loadOffices();
+  loadTasks();
+  loadApprovals();
+  loadTickets();
+  loadComplianceFlags();
+  loadSiigoStatus();
+}
+
+async function loadSiigoStatus() {
+  if (!currentOffice) return;
+  const status = await api(`/offices/${currentOffice.id}/siigo/config`);
+  const statusBox = document.getElementById("siigoStatus");
+  const form = document.getElementById("siigoConfigForm");
+  const runBtn = document.getElementById("siigoRunChecksBtn");
+  if (status.connected) {
+    statusBox.textContent = `Conectado como ${status.username}`;
+    statusBox.className = "";
+    runBtn.style.display = "block";
+    loadSiigoFlags();
+  } else {
+    statusBox.textContent = "Sin credenciales de Siigo configuradas";
+    statusBox.className = "empty";
+    form.style.display = "block";
+    runBtn.style.display = "none";
+    document.getElementById("siigoFlagsList").innerHTML = "";
+  }
+}
+
+async function loadSiigoFlags() {
+  if (!currentOffice) return;
+  const box = document.getElementById("siigoFlagsList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const flags = await api(`/offices/${currentOffice.id}/siigo/flags`);
+  if (!flags.length) {
+    box.innerHTML = '<div class="empty">Sin facturas rechazadas</div>';
+    return;
+  }
+  box.innerHTML = "";
+  flags.forEach(f => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>${escapeHtml(f.customer_name || "Cliente sin nombre")} · factura ${escapeHtml(f.invoice_number || f.siigo_invoice_id)}</span>
+        <span class="badge severity-${f.severity}">Rechazada DIAN</span>
+      </div>
+      <pre>${escapeHtml(f.message)}</pre>
+      ${f.error_detail ? `<pre style="color:var(--muted);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${escapeHtml(f.error_detail)}</pre>` : ""}
+    `;
+    box.appendChild(div);
+  });
+}
+
+document.getElementById("siigoSaveBtn").onclick = async () => {
+  if (!currentOffice) return;
+  const username = document.getElementById("siigoUsername").value.trim();
+  const accessKey = document.getElementById("siigoAccessKey").value.trim();
+  const partnerId = document.getElementById("siigoPartnerId").value.trim();
+  if (!username || !accessKey) return;
+  const btn = document.getElementById("siigoSaveBtn");
+  btn.disabled = true;
+  try {
+    await api(`/offices/${currentOffice.id}/siigo/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, accessKey, partnerId: partnerId || undefined }),
+    });
+    loadSiigoStatus();
+  } catch (e) {
+    alert("Error guardando credenciales de Siigo: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+document.getElementById("siigoRunChecksBtn").onclick = async () => {
+  if (!currentOffice) return;
+  const btn = document.getElementById("siigoRunChecksBtn");
+  btn.disabled = true;
+  btn.textContent = "Corriendo…";
+  try {
+    await api(`/offices/${currentOffice.id}/siigo/run-checks`, { method: "POST" });
+    loadSiigoFlags();
+  } catch (e) {
+    alert("Error corriendo chequeos DIAN: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Correr chequeos DIAN";
+  }
+};
+
+const CHECK_TYPE_LABELS = {
+  rut_vencido: "RUT vencido", aportes_vencidos: "Aportes vencidos", salario_bajo_minimo: "Salario bajo el mínimo",
+};
+
+async function loadComplianceFlags() {
+  if (!currentOffice) return;
+  const box = document.getElementById("complianceList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const flags = await api(`/offices/${currentOffice.id}/legal/flags`);
+  if (!flags.length) {
+    box.innerHTML = '<div class="empty">Sin alertas activas</div>';
+    return;
+  }
+  box.innerHTML = "";
+  flags.forEach(f => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>${escapeHtml(f.client_name)}</span>
+        <span class="badge severity-${f.severity}">${CHECK_TYPE_LABELS[f.check_type] || f.check_type}</span>
+      </div>
+      <pre>${escapeHtml(f.message)}</pre>
+    `;
+    box.appendChild(div);
+  });
+}
+
+const TICKET_TYPE_LABELS = {
+  factura: "Factura", rut: "RUT", datos: "Datos", consulta: "Consulta", reclamo: "Reclamo", otro: "Otro",
+};
+
+function ticketBadges(t) {
+  if (!t.ticket_type && !t.urgency) return "";
+  const typeLabel = TICKET_TYPE_LABELS[t.ticket_type] || t.ticket_type;
+  const type = t.ticket_type ? `<span class="badge ticket-type">${typeLabel}</span>` : "";
+  const urgency = t.urgency ? `<span class="badge urgency-${t.urgency}">urgencia ${t.urgency}</span>` : "";
+  return `${type} ${urgency}`;
+}
+
+async function loadTickets() {
+  if (!currentOffice) return;
+  const box = document.getElementById("ticketList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const tickets = await api(`/offices/${currentOffice.id}/tickets`);
+  if (!tickets.length) {
+    box.innerHTML = '<div class="empty">Sin tickets todavía</div>';
+    return;
+  }
+  box.innerHTML = "";
+  tickets.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>#${t.id}</span>
+        <span>
+          ${ticketBadges(t)}
+          <span class="badge ${t.status}">${t.status}</span>
+          ${approvalBadge(t)}
+        </span>
+      </div>
+      <pre>${escapeHtml(t.content)}</pre>
+      ${t.response ? `<pre style="color:var(--muted);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${escapeHtml(t.response)}</pre>` : ""}
+      ${t.status === "pending" ? `<div style="margin-top:8px"><button class="secondary ticketExecBtn" data-id="${t.id}">Ejecutar</button></div>` : ""}
+    `;
+    box.appendChild(div);
+  });
+  box.querySelectorAll(".ticketExecBtn").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = "Ejecutando…";
+      try {
+        await api(`/tasks/${btn.dataset.id}/execute`, { method: "POST" });
+        loadTickets();
+        loadTasks();
+        loadApprovals();
+      } catch (e) {
+        alert("Error ejecutando el ticket: " + e.message);
+        btn.disabled = false;
+      }
+    };
+  });
+}
+
+function approvalBadge(t) {
+  if (t.approval_status === "pending") return '<span class="badge approval-pending">esperando aprobación</span>';
+  if (t.approval_status === "approved") return '<span class="badge approval-approved">aprobada</span>';
+  if (t.approval_status === "rejected") return '<span class="badge approval-rejected">rechazada</span>';
+  return "";
+}
+
+async function loadApprovals() {
+  if (!currentOffice) return;
+  const box = document.getElementById("approvalList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const approvals = await api(`/offices/${currentOffice.id}/approvals`);
+  if (!approvals.length) {
+    box.innerHTML = '<div class="empty">Sin aprobaciones pendientes</div>';
+    return;
+  }
+  box.innerHTML = "";
+  approvals.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>#${t.id} · ${t.agent_type}</span>
+        ${approvalBadge(t)}
+      </div>
+      <pre>${escapeHtml(t.content)}</pre>
+      ${t.response ? `<pre style="color:var(--muted);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${escapeHtml(t.response)}</pre>` : ""}
+      <div class="approval-actions">
+        <button class="approve" data-id="${t.id}">Aprobar</button>
+        <button class="reject" data-id="${t.id}">Rechazar</button>
+      </div>
+    `;
+    box.appendChild(div);
+  });
+  box.querySelectorAll(".approve").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await api(`/tasks/${btn.dataset.id}/approve`, { method: "POST" });
+      loadApprovals();
+      loadTasks();
+      loadTickets();
+    };
+  });
+  box.querySelectorAll(".reject").forEach(btn => {
+    btn.onclick = async () => {
+      const note = prompt("¿Por qué se rechaza? (opcional)") || "";
+      btn.disabled = true;
+      await api(`/tasks/${btn.dataset.id}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
+      loadApprovals();
+      loadTasks();
+      loadTickets();
+    };
+  });
+}
+
+async function loadTasks() {
+  if (!currentOffice) return;
+  const box = document.getElementById("taskList");
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  const tasks = await api(`/offices/${currentOffice.id}/tasks`);
+  if (!tasks.length) {
+    box.innerHTML = '<div class="empty">Sin tareas todavía</div>';
+    return;
+  }
+  box.innerHTML = "";
+  tasks.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "task";
+    div.innerHTML = `
+      <div class="meta">
+        <span>#${t.id} · ${t.agent_type}</span>
+        <span>
+          ${ticketBadges(t)}
+          <span class="badge ${t.status}">${t.status}</span>
+          ${approvalBadge(t)}
+        </span>
+      </div>
+      <pre>${escapeHtml(t.content)}</pre>
+      ${t.response ? `<pre style="color:var(--muted);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">${escapeHtml(t.response)}</pre>` : ""}
+      ${t.status === "pending" ? `<div style="margin-top:8px"><button class="secondary execBtn" data-id="${t.id}">Ejecutar</button></div>` : ""}
+    `;
+    box.appendChild(div);
+  });
+  box.querySelectorAll(".execBtn").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = "Ejecutando…";
+      try {
+        await api(`/tasks/${btn.dataset.id}/execute`, { method: "POST" });
+        loadTasks();
+        loadApprovals();
+        loadTickets();
+      } catch (e) {
+        alert("Error ejecutando la tarea: " + e.message);
+        btn.disabled = false;
+      }
+    };
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+document.getElementById("createOfficeBtn").onclick = async () => {
+  const input = document.getElementById("newOfficeName");
+  const name = input.value.trim();
+  if (!name) return;
+  await api("/offices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  input.value = "";
+  loadOffices();
+};
+
+document.getElementById("classifyBtn").onclick = async () => {
+  const ta = document.getElementById("emailContent");
+  const content = ta.value.trim();
+  if (!content || !currentOffice) return;
+  const btn = document.getElementById("classifyBtn");
+  btn.disabled = true;
+  btn.textContent = "Clasificando…";
+  try {
+    await api("/classify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ officeId: currentOffice.id, emailContent: content }),
+    });
+    ta.value = "";
+    loadTasks();
+    loadTickets();
+  } catch (e) {
+    alert("Error clasificando: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Clasificar y crear tarea";
+  }
+};
+
+document.getElementById("runChecksBtn").onclick = async () => {
+  if (!currentOffice) return;
+  const btn = document.getElementById("runChecksBtn");
+  btn.disabled = true;
+  btn.textContent = "Corriendo…";
+  try {
+    await api(`/offices/${currentOffice.id}/legal/run-checks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    loadComplianceFlags();
+  } catch (e) {
+    alert("Error corriendo chequeos: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Correr chequeos";
+  }
+};
+
+loadOffices();
+</script>
+</body>
+</html>
