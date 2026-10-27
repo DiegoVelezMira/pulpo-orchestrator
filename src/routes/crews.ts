@@ -2,6 +2,7 @@ import express from 'express';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { executeContableCrew, convertirXml } from '../services/crewai-bridge';
+import { procesarPorReglas } from '../services/asiento-reglas';
 import {
   crearTablaDocumentos,
   guardarDocumento,
@@ -35,6 +36,13 @@ import {
 // Perfil tributario del comprador (la oficina): vive en la base de datos y es la
 // fuente de verdad. Si el POST trae officeId y la oficina tiene perfil, ese perfil
 // reemplaza lo que venga en documento.comprador (retenedor, gran contribuyente).
+// Spec v1: un documento leído se procesa por reglas fijas, sin IA. El Crew (agentes con modelo) queda para la fase 2: PULPO_USAR_CREW=1.
+async function procesarDocumento(officeId: string | number, doc: Record<string, any>, rol: 'comprador' | 'vendedor') {
+  if (process.env.PULPO_USAR_CREW === '1') return executeContableCrew({ id: officeId, ...doc });
+  const hoy = new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
+  return procesarPorReglas(doc, rol, hoy);
+}
+
 export function crearCrewsRouter(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS office_tax_profiles (
@@ -231,7 +239,7 @@ export function crearCrewsRouter(db: Database.Database) {
       item.detalle = pdf.hallazgos[0].slice(0, 300);
       return false;
     }
-    const resultado = await executeContableCrew({ id: lote.officeId, ...doc });
+    const resultado = await procesarDocumento(lote.officeId, doc, dueno.rol as 'comprador' | 'vendedor');
     const guardado = guardarDocumento(db, lote.officeId, doc, resultado, dueno);
     if (guardado === null) {
       // Error de procesamiento (p. ej. sin crédito de la API): no se registra; 2 seguidos frenan el lote.
@@ -611,7 +619,7 @@ export function crearCrewsRouter(db: Database.Database) {
     if (nitElegido) aprenderNit(db, id, nitElegido, cliente.id);
     if (rol === 'comprador') doc.comprador = { ...(doc.comprador || {}), ...perfilDeCliente(cliente) };
     try {
-      const resultado = await executeContableCrew({ id, ...doc });
+      const resultado = await procesarDocumento(id, doc, rol);
       const guardado = guardarDocumento(db, id, doc, resultado, { clienteId: cliente.id, rol });
       if (guardado === null) {
         return res.status(502).json({ status: 'error', error: String(resultado?.error ?? 'No se pudo procesar el documento; inténtalo de nuevo.').slice(0, 300), cliente_id: cliente.id });

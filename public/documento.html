@@ -36,6 +36,7 @@
 
   function cifras(d) {
     var items = [['Base', d.base_gravable], ['IVA', d.iva], ['Total', d.total_factura], ['ReteFuente', d.retefuente], ['ReteIVA', d.reteiva], ['Neto a pagar', d.neto_a_pagar]];
+    items = items.filter(function (i, n) { return n < 3 || (i[1] !== null && i[1] !== undefined); }); // sin retenciones: la versión 1 no las calcula
     return '<div class="cifras">' + items.map(function (i) { return '<div><span>' + i[0] + '</span><b>' + P.pesos(i[1]) + '</b></div>'; }).join('') + '</div>';
   }
   function asiento(a) {
