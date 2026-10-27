@@ -604,7 +604,8 @@ app.get("/offices/:officeId/siigo/flags", (req, res) => {
 app.use('/api/crews', crewsRouter(db));
 
 // Start server
-app.listen(PORT, () => {
+// PULPO_HOST=127.0.0.1 deja Pulpo accesible solo desde el mismo computador (instalación en un Mac de oficina).
+app.listen(Number(PORT), process.env.PULPO_HOST || "0.0.0.0", () => {
   console.log(`✓ Pulpo server running on http://localhost:${PORT}`);
   startGmailPoller(db);
 });
