@@ -228,3 +228,12 @@ test("un PDF cuyo XML ya está cargado se une a él: no gasta IA y no queda como
   const lista = await (await llamar("GET", `/api/crews/oficinas/${B}/documentos`, null, cB)).json();
   assert.equal((lista.documentos ?? lista).length, 1);
 });
+
+test("CUFE: un número pegado antes (la hora de aprobación) no se cuela, y el partido en líneas sigue funcionando", () => {
+  const real = "510aa10b7d326cbbf3abf2af39bcb182d693945d79d790f0b441ec5b0058becda2b9d178752638233eb966fd3effc238";
+  const t = `Código único factura electrónica: Fecha y Hora de Aprobación: 31/OCT/2026 08:32\n${real}\n\nProveedor Tecnológico: FENALCO`;
+  assert.equal(L.cufeLocal(t), real);
+  assert.equal(L.cufeLocal(`Aprobación 08 32\n2026\n${real}`), real);
+  assert.equal(L.cufeLocal(`CUFE: ${real.slice(0, 40)}\n${real.slice(40)}`), real);
+  assert.equal(L.cufeLocal("sin cufe aquí"), null);
+});

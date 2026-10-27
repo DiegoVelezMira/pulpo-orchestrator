@@ -30,8 +30,22 @@ export function extraerTexto(pdf: Buffer): Promise<string> {
 
 export const tieneTexto = (t: string) => t.replace(/\s+/g, '').length >= MIN_CARACTERES;
 
-// El CUFE (96 hex) suele partirse en varias líneas: se busca sobre el texto sin espacios.
+// El CUFE (96 hex) a veces viene entero en su línea y a veces partido en varias. Se busca por trozos del texto
+// (separados por espacios) para que un número pegado antes o después —por ejemplo la hora "08:32"— no se
+// cuele en el CUFE. Solo si no aparece así se busca sobre el texto sin espacios.
 export function cufeLocal(texto: string): string | null {
+  const trozos = texto.toLowerCase().split(/\s+/).filter(Boolean);
+  const entero = trozos.find((t) => /^[0-9a-f]{96}$/.test(t));
+  if (entero) return entero;
+  // CUFE partido: trozos hexadecimales consecutivos cuya unión da exactamente 96
+  for (let i = 0; i < trozos.length; i++) {
+    let acc = '';
+    for (let k = i; k < trozos.length && /^[0-9a-f]+$/.test(trozos[k]); k++) {
+      acc += trozos[k];
+      if (acc.length === 96) return acc;
+      if (acc.length > 96) break;
+    }
+  }
   const m = texto.replace(/\s+/g, '').toLowerCase().match(/[0-9a-f]{96}/);
   return m ? m[0] : null;
 }
