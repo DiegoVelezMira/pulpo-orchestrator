@@ -107,6 +107,13 @@ class TestCalculos(unittest.TestCase):
         pre = rt.prevalidar(D4, HOY)
         self.assertTrue(any("595000" in r for r in pre["rechazos"]), pre["rechazos"])
 
+    def test_items_con_iva_incluido_suman_el_total(self):
+        d = {"id": "ARA", "tipo": "factura_compra", "fecha": "2026-10-01", "nit_proveedor": "900480569-1",
+             "subtotal": 10254, "iva": 1036, "total": 11290,
+             "items": [{"cantidad": 1, "valor_unitario": 4800}, {"cantidad": 1, "valor_unitario": 6490}]}
+        pre = rt.prevalidar(d, HOY)
+        self.assertFalse(any("items suman" in r for r in pre["rechazos"]), pre["rechazos"])
+
     def test_caso5_fecha_futura_se_rechaza(self):
         pre = rt.prevalidar(D5, HOY)
         self.assertTrue(any("Fecha futura" in r for r in pre["rechazos"]), pre["rechazos"])

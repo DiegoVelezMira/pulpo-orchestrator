@@ -31,3 +31,12 @@ test("reglas fijas: cifras que no cuadran, fecha futura o falta de NIT piden rev
   assert.equal(r.motivos_revision.length, 3);
   assert.equal(r.asientos.detalles.asiento, null);
 });
+
+test("reglas fijas: precios con IVA incluido (factura de supermercado) no se marcan, y un descuadre real sí", () => {
+  const ara = { id: "O95A085665", tipo: "factura_compra", fecha: "2026-10-01", nit_proveedor: "900480569-1", subtotal: 10254, iva: 1036, total: 11290, items: [{ cantidad: 1, valor_unitario: 4800 }, { cantidad: 1, valor_unitario: 6490 }] };
+  const r = procesarPorReglas(ara, "comprador", "2026-10-26");
+  assert.equal(r.status, "procesado");
+  assert.deepEqual(r.motivos_revision, []);
+  const mal = procesarPorReglas({ ...ara, items: [{ cantidad: 1, valor_unitario: 4800 }, { cantidad: 1, valor_unitario: 9999 }] }, "comprador", "2026-10-26");
+  assert.equal(mal.status, "requiere_revision");
+});

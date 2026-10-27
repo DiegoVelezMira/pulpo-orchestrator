@@ -49,7 +49,10 @@ export function procesarPorReglas(doc: Record<string, any>, rol: 'comprador' | '
       if (c === null || u === null) { ok = false; break; }
       suma += c * u;
     }
-    if (ok && Math.abs(suma - subtotal) > TOLERANCIA) motivos.push(`Los ítems suman ${Math.round(suma)} pero el subtotal es ${Math.round(subtotal)}`);
+    // Los precios unitarios pueden venir sin IVA (suman el subtotal) o con IVA incluido (suman el total), como en el comercio minorista.
+    const cuadraSub = Math.abs(suma - subtotal) <= TOLERANCIA;
+    const cuadraTotal = total !== null && Math.abs(suma - total) <= TOLERANCIA;
+    if (ok && !cuadraSub && !cuadraTotal) motivos.push(`Los ítems suman ${Math.round(suma)} pero el subtotal es ${Math.round(subtotal)}`);
   }
 
   // Asiento: solo si las cifras cuadran, y siempre balanceado. En una nota crédito se invierten débitos y créditos.

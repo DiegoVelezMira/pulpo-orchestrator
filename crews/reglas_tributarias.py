@@ -138,7 +138,10 @@ def prevalidar(doc, hoy=None):
     subtotal = a_numero(doc.get("subtotal")) if "subtotal" in doc else suma
     if "subtotal" in doc and subtotal is None:
         revisiones.append("Subtotal no numerico")
-    if suma is not None and subtotal is not None and abs(suma - subtotal) > TOLERANCIA:
+    # Los precios unitarios pueden venir sin IVA (suman el subtotal) o con IVA incluido (suman el total).
+    total_decl = a_numero(doc.get("total")) if "total" in doc else None
+    if suma is not None and subtotal is not None and abs(suma - subtotal) > TOLERANCIA \
+            and not (total_decl is not None and abs(suma - total_decl) <= TOLERANCIA):
         rechazos.append(f"Los items suman {redondear(suma)} pero el subtotal declarado es {redondear(subtotal)}")
 
     iva = _iva_declarado(doc)
