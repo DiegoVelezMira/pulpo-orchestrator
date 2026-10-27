@@ -16,6 +16,7 @@ import {
   guardarPdfPendiente,
   pdfsEnEspera,
   borrarMarcador,
+  eliminarDocumentos,
 } from '../services/documentos-procesados';
 import { extraerTexto, tieneTexto, cufeLocal, huellaPdf, contrastar, alertasDeFechas, aDocumento, MAX_PDF_BYTES } from '../services/pdf-lector';
 import { leerConIa } from '../services/lector-ia';
@@ -494,6 +495,14 @@ export function crearCrewsRouter(db: Database.Database) {
     res.setHeader('X-Documentos-Excluidos', String(excluidos.length));
     if (excluidos.length) res.setHeader('X-Documentos-Excluidos-Ids', excluidos.slice(0, 20).join(',').replace(/[^\w.,-]/g, '_'));
     res.send('﻿' + out.join('\r\n') + '\r\n');
+  });
+
+  router.post('/oficinas/:officeId/documentos/eliminar', (req, res) => {
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 500 || ids.some((x: unknown) => typeof x !== 'string' || !x)) {
+      return res.status(400).json({ status: 'error', error: 'Indica los documentos a eliminar' });
+    }
+    res.json({ status: 'ok', ...eliminarDocumentos(db, String(req.params.officeId), ids as string[]) });
   });
 
   router.get('/oficinas/:officeId/documentos/:documentoId', (req, res) => {

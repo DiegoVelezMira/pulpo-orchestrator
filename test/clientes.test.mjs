@@ -218,3 +218,21 @@ test("migración: el perfil único de la oficina pasa a ser un cliente y se qued
   assert.equal(db.prepare("SELECT cliente_id FROM documentos_procesados WHERE documento_id = 'D1'").get().cliente_id, cs[0].id);
   db.close();
 });
+
+test("eliminar documentos: borra los de la oficina, deja los exportados y no toca los de otra oficina", async () => {
+  const db = new Database(dbPath);
+  doc(db, A, "DEL1", { cliente: c1.id });
+  doc(db, A, "DEL2", { cliente: c1.id });
+  doc(db, A, "DELEXP", { rev: "aprobado", cliente: c1.id, exportado: "2026-10-20T10:00:00Z" });
+  doc(db, B, "DELB", {});
+  db.close();
+  assert.equal((await llamar("POST", `/api/crews/oficinas/${A}/documentos/eliminar`, { ids: [] }, cA)).status, 400);
+  assert.equal((await llamar("POST", `/api/crews/oficinas/${A}/documentos/eliminar`, { ids: ["DEL1"] }, cB)).status, 403);
+  const r = await (await llamar("POST", `/api/crews/oficinas/${A}/documentos/eliminar`, { ids: ["DEL1", "DEL2", "DELEXP", "DELB", "NOEXISTE"] }, cA)).json();
+  assert.deepEqual(r.eliminados.sort(), ["DEL1", "DEL2"]);
+  assert.deepEqual(r.exportados, ["DELEXP"]);
+  assert.deepEqual(r.noEncontrados.sort(), ["DELB", "NOEXISTE"]);
+  const db2 = new Database(dbPath);
+  assert.equal(db2.prepare("SELECT COUNT(*) n FROM documentos_procesados WHERE documento_id IN ('DELB','DELEXP')").get().n, 2);
+  db2.close();
+});

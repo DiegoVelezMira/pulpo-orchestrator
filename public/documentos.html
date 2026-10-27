@@ -31,6 +31,7 @@
   </div>
   <div class="card acciones" id="acc">
     <button class="p" id="csv" disabled>Descargar CSV</button>
+    <button id="del" disabled>Eliminar</button><button id="delNo" hidden>Cancelar</button>
     <span class="muted" id="accTxt">Marca los documentos de los clientes que quieras exportar. Se genera un CSV por cada cliente seleccionado, con sus documentos listos (revisados, o leídos sin pendientes), y quedan en Exportado.</span>
   </div>
   <div id="msg" hidden></div>
@@ -139,7 +140,34 @@
     var n = clientesSel().length;
     $('csv').disabled = n === 0;
     $('csv').textContent = n ? 'Descargar ' + n + ' CSV' : 'Descargar CSV';
+    botonDel();
   }
+
+  // Eliminar: dos pasos (Eliminar -> Sí, eliminar N). Los exportados no se borran.
+  var confirmando = false;
+  function botonDel() {
+    var n = sel.size;
+    if (!n) confirmando = false;
+    $('del').disabled = n === 0;
+    $('del').textContent = confirmando ? 'Sí, eliminar ' + n : 'Eliminar' + (n ? ' ' + n : '');
+    $('delNo').hidden = !confirmando;
+  }
+  $('delNo').onclick = function () { confirmando = false; botonDel(); };
+  $('del').onclick = function () {
+    if (!confirmando) {
+      var exp = docs.filter(function (d) { return sel.has(d.documento_id) && d.estado_pulpo === 'exportado'; }).length;
+      confirmando = true; botonDel();
+      msg('¿Eliminar ' + sel.size + ' documento(s)? No se puede deshacer.' + (exp ? ' ' + exp + ' ya exportado(s) no se borrarán.' : ''));
+      return;
+    }
+    var ids = Array.from(sel);
+    $('del').disabled = true;
+    P.api(base() + '/documentos/eliminar', { method: 'POST', body: { ids: ids } }).then(function (r) {
+      confirmando = false; sel.clear();
+      msg('Eliminados: ' + r.eliminados.length + '.' + (r.exportados.length ? ' ' + r.exportados.length + ' ya exportado(s) se dejaron.' : ''), 'ok');
+      cargar();
+    }).catch(function (e) { msg('No se pudo eliminar: ' + esc(e.message)); botonDel(); });
+  };
 
   function descargar(clienteId) {
     return fetch(base() + '/documentos/export.csv?cliente=' + clienteId).then(function (r) {

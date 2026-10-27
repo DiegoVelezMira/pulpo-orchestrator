@@ -290,3 +290,22 @@ export function pdfsEnEspera(db: Database.Database, officeId: string | number) {
 export function borrarMarcador(db: Database.Database, officeId: string | number, documentoId: string) {
   db.prepare("DELETE FROM documentos_procesados WHERE office_id = ? AND documento_id = ? AND estado IN ('recibido','ilegible')").run(String(officeId), documentoId);
 }
+
+// Borrar documentos de la oficina. Los ya exportados no se tocan (la oficina ya los entregó).
+// Al borrar la fila también se libera su huella y su CUFE, así que el archivo puede volver a subirse.
+export function eliminarDocumentos(db: Database.Database, officeId: string | number, ids: string[]) {
+  const eliminados: string[] = [];
+  const exportados: string[] = [];
+  const noEncontrados: string[] = [];
+  const buscar = db.prepare('SELECT exportado_at FROM documentos_procesados WHERE office_id = ? AND documento_id = ?');
+  const borrar = db.prepare('DELETE FROM documentos_procesados WHERE office_id = ? AND documento_id = ?');
+  db.transaction(() => {
+    for (const id of ids) {
+      const f = buscar.get(String(officeId), id) as { exportado_at: string | null } | undefined;
+      if (!f) noEncontrados.push(id);
+      else if (f.exportado_at) exportados.push(id);
+      else { borrar.run(String(officeId), id); eliminados.push(id); }
+    }
+  })();
+  return { eliminados, exportados, noEncontrados };
+}
