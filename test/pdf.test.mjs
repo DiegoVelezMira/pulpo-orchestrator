@@ -164,6 +164,10 @@ test("liberar lo que está en espera: sin cupo no hace nada; con más tope lee y
   const rev = docs.find((d) => d.documento_id.startsWith("FE-1003"));
   assert.equal(rev.estado_pulpo, "necesita_ayuda");
   assert.equal(rev.cliente_nombre, "Comercial Norte");
+  // Aunque quede para una persona, el documento trae sus cifras (calculadas por reglas, sin IA) y el aviso de la lectura.
+  const det = (await (await llamar("GET", `/api/crews/oficinas/${A}/documentos/${encodeURIComponent(rev.documento_id)}`, null, cA)).json()).documento;
+  assert.ok(det.base_gravable > 0, "trae la base para que quien revisa la vea");
+  assert.ok(det.motivos.length >= 1 && det.motivos.some((m) => /total/i.test(m)));
   assert.equal(docs.some((d) => d.documento_id.startsWith("pdf-") && d.estado === "recibido"), false, "el marcador de espera se retiró");
 });
 

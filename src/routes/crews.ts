@@ -231,10 +231,13 @@ export function crearCrewsRouter(db: Database.Database) {
     }
     const dueno = { clienteId: hallado.cliente.id, rol: hallado.rol };
     if (pdf && pdf.hallazgos.length) {
-      // La lectura con IA no pasó el contraste con el texto: no se contabiliza sola, queda para una persona.
-      guardarDocumento(db, lote.officeId, doc, {
-        status: 'requiere_revision', documento_id: doc.id, motivos_revision: pdf.hallazgos, timestamp: new Date().toISOString(),
-      }, dueno);
+      // La lectura con IA no pasó el contraste con el texto o tiene una alerta: no se da por buena sola, queda para una persona.
+      // Aun así se calculan las cifras y el asiento sugerido (por reglas, sin IA) para que quien revisa los vea junto al aviso.
+      const base = await procesarDocumento(lote.officeId, doc, dueno.rol as 'comprador' | 'vendedor');
+      const conAviso = base && !base.error
+        ? { ...base, status: base.status === 'rechazado' ? 'rechazado' : 'requiere_revision', motivos_revision: [...pdf.hallazgos, ...(base.motivos_revision ?? [])] }
+        : { status: 'requiere_revision', documento_id: doc.id, motivos_revision: pdf.hallazgos, timestamp: new Date().toISOString() };
+      guardarDocumento(db, lote.officeId, doc, conAviso, dueno);
       marcarOrigenPdf(db, lote.officeId, item.documento_id, pdf);
       item.estado = 'requiere_revision';
       item.detalle = pdf.hallazgos[0].slice(0, 300);
